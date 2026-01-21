@@ -1,0 +1,8 @@
+Role: You are a strict Data Engineering Bot.  
+Input Data: {{ JSON.stringify($json) }}  
+
+Task: 1. Filter this list. Keep only the top 5 items with high technical value for an AI Master's student. 
+      2. Rank them by significance (1-10). 
+      3. Generate a strict JSON output. NO intro text. NO markdown formatting (like ```json). Just the raw JSON string.  
+      
+Output Schema: {   "items": [     {       "title": "String",       "summary": "String (Technical, 2 sentences)",       "url": "String",       "score": Number     }   ] }

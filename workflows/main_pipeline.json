@@ -1,0 +1,377 @@
+{
+  "name": "AI News Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 1
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "72a646fa-984d-45ba-b16a-247652eca98e",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "http://export.arxiv.org/api/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "search_query",
+              "value": "cat:cs.AI"
+            },
+            {
+              "name": "max_results",
+              "value": "20"
+            },
+            {
+              "name": "sortBy",
+              "value": "submittedDate"
+            },
+            {
+              "name": "sortOrder",
+              "value": "descending"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        224,
+        -112
+      ],
+      "id": "371d3ee3-0676-4729-951e-f3781fd5b358",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "url": "https://huggingface.co/blog/feed.xml",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        64
+      ],
+      "id": "62d905f9-673e-4fe4-9dd7-45282958c290",
+      "name": "RSS Read"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if the feed exists safely using '?.'\n// If items[0] or .feed doesn't exist, 'entries' defaults to an empty array []\nconst entries = items[0]?.json?.feed?.entry || [];\n\nreturn entries.map(paper => ({\n  json: {\n    title: paper.title,\n    summary: paper.summary,\n    url: paper.id,\n    source: \"ArXiv Research\",\n    published_at: paper.published,\n    type: \"Research\"\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        -112
+      ],
+      "id": "3758f12c-c4c1-4c41-9778-0f0a1853d56b",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => ({\n  json: {\n    title: item.json.title,\n    summary: item.json.contentSnippet || item.json.content || \"\",\n    url: item.json.link,\n    source: \"Tech Blog\",\n    published_at: item.json.pubDate,\n    type: \"News\"\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        64
+      ],
+      "id": "8be290d0-c023-4de2-995d-2493d2b1664d",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        736,
+        -64
+      ],
+      "id": "4147602f-2a28-4561-b96f-1af5d063056a",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "const uniqueItems = new Map();\nitems.forEach(item => {\n  // Create a simple hash from the title (lowercase, no spaces)\n  const hash = item.json.title.toLowerCase().replace(/[^a-z0-9]/g, '');\n  if (!uniqueItems.has(hash)) {\n    uniqueItems.set(hash, item);\n  }\n});\nreturn Array.from(uniqueItems.values());"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        944,
+        -64
+      ],
+      "id": "45cee6e9-897b-4e7b-807e-e279c88d567f",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        1152,
+        -64
+      ],
+      "id": "384cc7c7-eb47-4dbe-816a-6d8b7e6dd0bf",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Role: You are a strict Data Engineering Bot.  Input Data: {{ JSON.stringify($json) }}  Task: 1. Filter this list. Keep only the top 5 items with high technical value for an AI Master's student. 2. Rank them by significance (1-10). 3. Generate a strict JSON output. NO intro text. NO markdown formatting (like ```json). Just the raw JSON string.  Output Schema: {   \"items\": [     {       \"title\": \"String\",       \"summary\": \"String (Technical, 2 sentences)\",       \"url\": \"String\",       \"score\": Number     }   ] }",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        1568,
+        -64
+      ],
+      "id": "8b4a0a00-fbeb-4154-9900-1a9d0cc64aa9",
+      "name": "Basic LLM Chain"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        1776,
+        -64
+      ],
+      "id": "a3724557-5fff-4590-9d72-c6d360c36bd7",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "xxs7QlCK4niVXg2T",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Safe access: Use '?.' and provide a default empty string.\n// We also check commonly used keys just in case the name changed.\nconst response = items[0]?.json?.content || items[0]?.json?.text || items[0]?.json?.output || '';\n\n// 2. Safety check: Ensure 'response' is a string before running string methods.\n// If the AI returned an Object directly, we might not need to parse it.\nif (typeof response !== 'string') {\n  // If it's already an object, return it wrapped in the expected format\n  if (typeof response === 'object' && response !== null) {\n     return [ { json: response } ];\n  }\n  return []; // Return empty if data is unusable\n}\n\n// 3. Clean the markdown\nconst cleanJson = response.replace(/```json/g, '').replace(/```/g, '').trim();\n\ntry {\n  const parsed = JSON.parse(cleanJson);\n  // Ensure parsed.items exists and is an array before mapping\n  if (parsed.items && Array.isArray(parsed.items)) {\n      return parsed.items.map(item => ({ json: item }));\n  } else {\n      // If parsed JSON is valid but doesn't have an 'items' array\n      return [ { json: parsed } ];\n  }\n} catch (error) {\n  // Fallback if AI output valid text but invalid JSON\n  return [];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        -64
+      ],
+      "id": "191b715a-022b-4b4f-af84-4ec227e48a34",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": {
+          "__rl": true,
+          "value": "2ef528fa-011e-80f5-a540-d2c2d7e4c05b",
+          "mode": "list",
+          "cachedResultName": "AI News - Everyday",
+          "cachedResultUrl": "https://www.notion.so/2ef528fa011e80f5a540d2c2d7e4c05b"
+        },
+        "title": "AI News-Everyday",
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Name|title",
+              "title": "=Name {{ $json.title }}"
+            },
+            {
+              "key": "Summary|rich_text",
+              "textContent": "={{ $json.summary }}"
+            },
+            {
+              "key": "URL|url",
+              "urlValue": "={{ $json.url }}"
+            },
+            {
+              "key": "Score|number",
+              "numberValue": "={{ $json.score }}"
+            },
+            {
+              "key": "Date|date",
+              "date": "={{ $now }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [
+        2128,
+        -64
+      ],
+      "id": "499b3187-351f-4754-9d0d-a6f2efb87a67",
+      "name": "Create a database page",
+      "credentials": {
+        "notionApi": {
+          "id": "LRsmBUXaSUjXQnFr",
+          "name": "Notion account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "Create a database page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "244303cb-b53c-4ff1-b5cb-dabdaa24cb54",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "358df46060f7f070716a65dba3645c9fbeef55d1335115489a4b2266b79a3b44"
+  },
+  "id": "0RE54AdX6lToaocctVFFB",
+  "tags": []
+}
