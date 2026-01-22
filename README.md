@@ -6,13 +6,13 @@
 
 ## 🚀 Key Features
 * **Multi-Source Ingestion:** Aggregates real-time data from ArXiv (API) and Hugging Face (RSS).
-* **LLM-Based Filtering:** Uses **Gemini 1.5 Flash** to semantic rank papers by technical significance, filtering out 80% of marketing fluff.
+* **LLM-Based Filtering:** Uses **Gemini 2.5 Flash** to semantic rank papers by technical significance, filtering out 80% of marketing fluff.
 * **Idempotency:** Implements custom JavaScript deduplication logic to ensure zero data redundancy.
 * **Automated Delivery:** Pushes structured, ranked insights directly to a Notion Knowledge Base.
 
 ## 🛠️ Tech Stack
 * **Orchestration:** n8n (Self-Hosted)
-* **Intelligence:** Google Gemini 1.5 Flash API
+* **Intelligence:** Google Gemini 2.5 Flash API
 * **Database:** Notion API
 * **Scripting:** JavaScript (ES6) for data normalization
 
