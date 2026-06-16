@@ -2,7 +2,7 @@
 
 AI Daily Brief is a fully automated daily AI news and research brief.
 
-It collects AI-related research papers and news from multiple sources, ranks the most important items, summarizes them using NVIDIA NIM, and publishes the final brief to a Notion database.
+It collects AI-related research papers and news from multiple sources, ranks the most important items, summarizes them using Qwen3-80b model(via Nvidia NIM), and publishes the final brief to a Notion database.
 
 The project runs on Cloudflare Workers with a daily cron trigger, so it continues working even when your laptop is off.
 
@@ -52,7 +52,7 @@ Deduplicate repeated links
 Rank papers and news
         |
         v
-Use NVIDIA NIM for news ranking and summaries
+Use Qwen3 model for news ranking and summaries
         |
         v
 Check Notion for existing Date + Rank rows
