@@ -1,4 +1,5 @@
 import json
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from workers import fetch
 
@@ -11,6 +12,43 @@ NOTION_VERSION = "2022-06-28"
 def _truncate(value, max_length=1900):
     text = "" if value is None else str(value)
     return text[:max_length]
+
+
+def _normalize_title(value):
+    return " ".join(str(value or "").split()).strip().lower()
+
+
+def _normalize_url(value):
+    url = str(value or "").strip()
+
+    if not url:
+        return ""
+
+    parts = urlsplit(url)
+    query = urlencode(sorted(parse_qsl(parts.query, keep_blank_values=True)))
+    path = parts.path.rstrip("/") or "/"
+
+    return urlunsplit((
+        parts.scheme.lower(),
+        parts.netloc.lower(),
+        path,
+        query,
+        "",
+    ))
+
+
+def _item_identity(item):
+    normalized_url = _normalize_url(item.get("url"))
+
+    if normalized_url:
+        return ("url", normalized_url)
+
+    normalized_title = _normalize_title(item.get("title"))
+
+    if normalized_title:
+        return ("title", normalized_title)
+
+    return None
 
 
 def _short_description(item, max_words=100):
@@ -112,6 +150,10 @@ def _rank_from_page(page):
     return rich_text[0].get("plain_text", "")
 
 
+def _link_from_page(page):
+    return page.get("properties", {}).get("Link", {}).get("url", "") or ""
+
+
 async def _query_existing_pages_for_date(notion_token, database_id, digest_date):
     response = await fetch(
         f"{NOTION_DATABASES_URL}/{database_id}/query",
@@ -144,6 +186,50 @@ async def _query_existing_pages_for_date(notion_token, database_id, digest_date)
     }
 
 
+async def _query_recent_pages(notion_token, database_id, page_size=100, max_pages=5):
+    results = []
+    start_cursor = None
+
+    for _ in range(max_pages):
+        payload = {
+            "page_size": page_size,
+            "sorts": [
+                {
+                    "property": "Date",
+                    "direction": "descending",
+                },
+            ],
+        }
+
+        if start_cursor:
+            payload["start_cursor"] = start_cursor
+
+        response = await fetch(
+            f"{NOTION_DATABASES_URL}/{database_id}/query",
+            method="POST",
+            headers={
+                "authorization": f"Bearer {notion_token}",
+                "content-type": "application/json",
+                "notion-version": NOTION_VERSION,
+            },
+            body=json.dumps(payload),
+        )
+
+        data = await response.json()
+
+        if not response.ok:
+            raise RuntimeError(f"Notion database query failed: {data}")
+
+        results.extend(data.get("results", []))
+
+        if not data.get("has_more") or not data.get("next_cursor"):
+            break
+
+        start_cursor = data.get("next_cursor")
+
+    return results
+
+
 def _page_title(page):
     title_property = page.get("properties", {}).get("Title", {})
     title = title_property.get("title", [])
@@ -152,6 +238,23 @@ def _page_title(page):
         return ""
 
     return title[0].get("plain_text", "")
+
+
+def _existing_item_identities(pages):
+    identities = set()
+
+    for page in pages:
+        normalized_url = _normalize_url(_link_from_page(page))
+
+        if normalized_url:
+            identities.add(("url", normalized_url))
+
+        normalized_title = _normalize_title(_page_title(page))
+
+        if normalized_title:
+            identities.add(("title", normalized_title))
+
+    return identities
 
 
 async def publish_digest_to_notion(env, digest):
@@ -209,14 +312,22 @@ async def filter_missing_digest_items(env, digest):
         database_id,
         digest["date"],
     )
+    recent_pages = await _query_recent_pages(notion_token, database_id)
+    existing_identities = _existing_item_identities(recent_pages)
 
     missing_papers = [
         item for item in digest.get("papers", [])
-        if item.get("rank", "") not in existing_pages_by_rank
+        if (
+            item.get("rank", "") not in existing_pages_by_rank
+            and _item_identity(item) not in existing_identities
+        )
     ]
     missing_news = [
         item for item in digest.get("news", [])
-        if item.get("rank", "") not in existing_pages_by_rank
+        if (
+            item.get("rank", "") not in existing_pages_by_rank
+            and _item_identity(item) not in existing_identities
+        )
     ]
 
     return {
@@ -224,4 +335,5 @@ async def filter_missing_digest_items(env, digest):
         "papers": missing_papers,
         "news": missing_news,
         "existing_count": len(existing_pages_by_rank),
+        "existing_recent_count": len(recent_pages),
     }

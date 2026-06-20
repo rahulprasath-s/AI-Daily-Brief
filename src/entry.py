@@ -3,7 +3,7 @@ import traceback
 
 from workers import WorkerEntrypoint, Response
 
-from digest import build_digest
+from digest import build_digest, _news_window
 from nim import add_nim_summaries
 from notion import filter_missing_digest_items, publish_digest_to_notion
 from sources.arxiv import fetch_arxiv_papers
@@ -55,9 +55,14 @@ class Default(WorkerEntrypoint):
                     "NOTION_DATABASE_ID": bool(getattr(self.env, "NOTION_DATABASE_ID", None)),
                     "NVIDIA_NIM_API_KEY": bool(getattr(self.env, "NVIDIA_NIM_API_KEY", None)),
                 },
+                "config": {
+                    "DIGEST_TIMEZONE": getattr(self.env, "DIGEST_TIMEZONE", None) or "UTC",
+                    "DIGEST_WINDOW_START_HOUR": getattr(self.env, "DIGEST_WINDOW_START_HOUR", None) or "8",
+                },
             })
 
         if method == "GET" and url.endswith("/status"):
+            news_window = _news_window(self.env)
             return json_response({
                 "ok": True,
                 "service": "ai-daily-brief-worker",
@@ -65,7 +70,13 @@ class Default(WorkerEntrypoint):
                 "publishes_to": "notion",
                 "sources": ["arXiv", "hacker news", "hugging face", "techmeme"],
                 "summarizer": "qwen/qwen3-next-80b-a3b-instruct via NVIDIA NIM",
-                "dedupe_key": "Date + Rank",
+                "dedupe_key": "Same-day Date + Rank, plus cross-day normalized Link/Title history",
+                "news_window": {
+                    "timezone": news_window["timezone"],
+                    "start_hour": news_window["start_hour"],
+                    "current_window_start": news_window["window_start_local"].isoformat(),
+                    "current_window_end": news_window["window_end_local"].isoformat(),
+                },
                 "secrets_ready": {
                     "NOTION_TOKEN": bool(getattr(self.env, "NOTION_TOKEN", None)),
                     "NOTION_DATABASE_ID": bool(getattr(self.env, "NOTION_DATABASE_ID", None)),

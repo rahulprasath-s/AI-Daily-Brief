@@ -1,4 +1,6 @@
+from datetime import datetime, timezone
 from html.parser import HTMLParser
+import re
 from urllib.parse import urljoin
 
 from js import fetch
@@ -7,6 +9,9 @@ from filtering import is_ai_related_text
 
 
 TECHMEME_URL = "https://www.techmeme.com/"
+TECHMEME_SNAPSHOT_PATTERN = re.compile(
+    r"([A-Z][a-z]+ \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M)"
+)
 
 
 class TechmemeLinkParser(HTMLParser):
@@ -62,7 +67,7 @@ def _is_story_link(link):
     return link["title"].strip().lower() not in noisy_titles
 
 
-def _normalize_link(link):
+def _normalize_link(link, snapshot_timestamp=None):
     url = urljoin(TECHMEME_URL, link["href"])
     title = link["title"]
 
@@ -71,10 +76,20 @@ def _normalize_link(link):
         "url": url,
         "source": "techmeme",
         "type": "news",
-        "published_at": None,
+        "published_at": snapshot_timestamp,
         "score_hint": 0,
         "summary_input": title,
     }
+
+
+def _snapshot_timestamp(html):
+    match = TECHMEME_SNAPSHOT_PATTERN.search(html)
+
+    if not match:
+        return None
+
+    parsed = datetime.strptime(match.group(1), "%B %d, %Y, %I:%M %p")
+    return parsed.replace(tzinfo=timezone.utc).isoformat()
 
 
 def _dedupe_items(items):
@@ -100,11 +115,12 @@ async def fetch_techmeme_ai_stories(limit=10):
         raise RuntimeError(f"Techmeme request failed with status {response.status}")
 
     html = await response.text()
+    snapshot_timestamp = _snapshot_timestamp(html)
     parser = TechmemeLinkParser()
     parser.feed(html)
 
     items = [
-        _normalize_link(link)
+        _normalize_link(link, snapshot_timestamp=snapshot_timestamp)
         for link in parser.links
         if _is_story_link(link) and is_ai_related_text(link["title"], link["href"])
     ]

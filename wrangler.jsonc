@@ -13,6 +13,10 @@
 	"observability": {
 		"enabled": true
 	},
+	"vars": {
+		"DIGEST_TIMEZONE": "Europe/Berlin",
+		"DIGEST_WINDOW_START_HOUR": "8"
+	},
 	"triggers": {
 		"crons": [
 			"0 6 * * *"
