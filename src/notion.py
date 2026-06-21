@@ -37,7 +37,7 @@ def _normalize_url(value):
     ))
 
 
-def _item_identity(item):
+def item_identity(item):
     normalized_url = _normalize_url(item.get("url"))
 
     if normalized_url:
@@ -312,21 +312,20 @@ async def filter_missing_digest_items(env, digest):
         database_id,
         digest["date"],
     )
-    recent_pages = await _query_recent_pages(notion_token, database_id)
-    existing_identities = _existing_item_identities(recent_pages)
+    existing_identities = _existing_item_identities(existing_pages_by_rank.values())
 
     missing_papers = [
         item for item in digest.get("papers", [])
         if (
             item.get("rank", "") not in existing_pages_by_rank
-            and _item_identity(item) not in existing_identities
+            and item_identity(item) not in existing_identities
         )
     ]
     missing_news = [
         item for item in digest.get("news", [])
         if (
             item.get("rank", "") not in existing_pages_by_rank
-            and _item_identity(item) not in existing_identities
+            and item_identity(item) not in existing_identities
         )
     ]
 
@@ -335,5 +334,21 @@ async def filter_missing_digest_items(env, digest):
         "papers": missing_papers,
         "news": missing_news,
         "existing_count": len(existing_pages_by_rank),
-        "existing_recent_count": len(recent_pages),
+        "existing_same_day_identity_count": len(existing_identities),
     }
+
+
+async def get_recent_item_identities(env, page_size=100, max_pages=5):
+    notion_token = getattr(env, "NOTION_TOKEN", None)
+    database_id = getattr(env, "NOTION_DATABASE_ID", None)
+
+    if not notion_token or not database_id:
+        return set()
+
+    recent_pages = await _query_recent_pages(
+        notion_token,
+        database_id,
+        page_size=page_size,
+        max_pages=max_pages,
+    )
+    return _existing_item_identities(recent_pages)

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from notion import get_recent_item_identities, item_identity
 from sources.arxiv import fetch_arxiv_papers
 from sources.hackernews import fetch_hackernews_ai_stories
 from sources.huggingface import fetch_huggingface_ai_models
@@ -15,7 +16,10 @@ DEFAULT_WINDOW_START_HOUR = 8
 def _rank_items(items, prefix, limit):
     ranked_items = sorted(
         items,
-        key=lambda item: item.get("score_hint", 0) or 0,
+        key=lambda item: (
+            not item.get("recently_seen", False),
+            item.get("score_hint", 0) or 0,
+        ),
         reverse=True,
     )[:limit]
 
@@ -39,6 +43,17 @@ def _dedupe_by_url(items):
         unique_items.append(item)
 
     return unique_items
+
+
+def _mark_recently_seen(items, existing_identities):
+    marked_items = []
+
+    for item in items:
+        identity = item_identity(item)
+        item["recently_seen"] = identity in existing_identities if identity else False
+        marked_items.append(item)
+
+    return marked_items
 
 
 def _digest_timezone(env):
@@ -168,8 +183,14 @@ def _filter_items_to_window(items, window_start_utc, window_end_utc):
 async def build_digest(env=None):
     digest_env = env
     window = _news_window(digest_env)
-    papers = await fetch_arxiv_papers(limit=12)
-    hn_news = await fetch_hackernews_ai_stories(limit=30, scan_count=120)
+    recent_identities = (
+        await get_recent_item_identities(env)
+        if env
+        else set()
+    )
+
+    papers = await fetch_arxiv_papers(limit=60)
+    hn_news = await fetch_hackernews_ai_stories(limit=5, scan_count=8)
     hf_news = await fetch_huggingface_ai_models(limit=30, scan_count=80)
     techmeme_news = await fetch_techmeme_ai_stories(limit=20)
 
@@ -179,8 +200,9 @@ async def build_digest(env=None):
         window["window_start_utc"],
         window["window_end_utc"],
     )
-    all_news = windowed_news_result["items"]
-    ranked_papers = _rank_items(papers, "P", 5)
+    eligible_papers = _mark_recently_seen(papers, recent_identities)
+    all_news = _mark_recently_seen(windowed_news_result["items"], recent_identities)
+    ranked_papers = _rank_items(eligible_papers, "P", 5)
     locally_ranked_news = _rank_items(all_news, "N", 20)
     ranked_news = (
         await rank_news_with_nim(env, locally_ranked_news, limit=10)
@@ -206,5 +228,12 @@ async def build_digest(env=None):
             "news_window_start_hour": window["start_hour"],
             "news_window_start": window["window_start_local"].isoformat(),
             "news_window_end": window["window_end_local"].isoformat(),
+            "recent_identities_seen": len(recent_identities),
+            "papers_already_seen_recently": sum(
+                1 for item in eligible_papers if item.get("recently_seen")
+            ),
+            "news_already_seen_recently": sum(
+                1 for item in all_news if item.get("recently_seen")
+            ),
         },
     }

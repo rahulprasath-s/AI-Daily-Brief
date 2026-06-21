@@ -106,6 +106,7 @@ def _ranking_prompt(items, limit):
             "source": item.get("source"),
             "url": item.get("url"),
             "score_hint": item.get("score_hint", 0),
+            "recently_seen": bool(item.get("recently_seen")),
             "context": _shorten(item.get("summary_input", ""), 300),
         })
 
@@ -113,7 +114,7 @@ def _ranking_prompt(items, limit):
 Rank these AI news/model candidates for a daily AI brief.
 
 Prefer: major AI releases, credible sources, meaningful research/product impact, originality, and broad relevance.
-Avoid: duplicates, low-signal model variants, and obscure items unless technically important.
+Avoid: items marked recently_seen when fresher unseen options exist, duplicates, low-signal model variants, and obscure items unless technically important.
 
 Return only valid JSON with this shape:
 {{"ranked_ids":[0,1,2]}}
