@@ -1,128 +1,64 @@
 from datetime import datetime, timezone
-from html.parser import HTMLParser
-import re
-from urllib.parse import urljoin
+import xml.etree.ElementTree as ET
 
 from js import fetch
 
 from filtering import is_ai_related_text
 
 
-TECHMEME_URL = "https://www.techmeme.com/"
-TECHMEME_SNAPSHOT_PATTERN = re.compile(
-    r"([A-Z][a-z]+ \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M)"
-)
+TECHMEME_FEED_URL = "https://www.techmeme.com/feed.xml"
 
 
-class TechmemeLinkParser(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.links = []
-        self._current_href = None
-        self._current_class = ""
-        self._text_parts = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag != "a":
-            return
-
-        attr_map = dict(attrs)
-        self._current_href = attr_map.get("href")
-        self._current_class = attr_map.get("class", "")
-        self._text_parts = []
-
-    def handle_data(self, data):
-        if self._current_href:
-            self._text_parts.append(data)
-
-    def handle_endtag(self, tag):
-        if tag != "a" or not self._current_href:
-            return
-
-        title = " ".join(" ".join(self._text_parts).split())
-
-        if title:
-            self.links.append({
-                "title": title,
-                "href": self._current_href,
-                "class": self._current_class,
-            })
-
-        self._current_href = None
-        self._current_class = ""
-        self._text_parts = []
+def _text(element, name):
+    child = element.find(name)
+    return "" if child is None or child.text is None else " ".join(child.text.split())
 
 
-def _is_story_link(link):
-    href = link["href"]
-
-    if href.startswith("#") or href.startswith("javascript:"):
-        return False
-
-    if len(link["title"]) < 12:
-        return False
-
-    # Techmeme navigation links are useful to ignore before keyword filtering.
-    noisy_titles = {"about", "archive", "events", "login", "sponsor posts", "tip us"}
-    return link["title"].strip().lower() not in noisy_titles
-
-
-def _normalize_link(link, snapshot_timestamp=None):
-    url = urljoin(TECHMEME_URL, link["href"])
-    title = link["title"]
-
-    return {
-        "title": title,
-        "url": url,
-        "source": "techmeme",
-        "type": "news",
-        "published_at": snapshot_timestamp,
-        "score_hint": 0,
-        "summary_input": title,
-    }
-
-
-def _snapshot_timestamp(html):
-    match = TECHMEME_SNAPSHOT_PATTERN.search(html)
-
-    if not match:
+def _parse_pub_date(value):
+    if not value:
         return None
 
-    parsed = datetime.strptime(match.group(1), "%B %d, %Y, %I:%M %p")
-    return parsed.replace(tzinfo=timezone.utc).isoformat()
+    try:
+        parsed = datetime.strptime(value, "%a, %d %b %Y %H:%M:%S %z")
+    except ValueError:
+        return None
+
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
-def _dedupe_items(items):
-    seen = set()
-    unique_items = []
+def _parse_techmeme_feed(xml_text):
+    root = ET.fromstring(xml_text)
+    items = []
 
-    for item in items:
-        key = (item["title"].lower(), item["url"])
+    for entry in root.findall("./channel/item"):
+        title = _text(entry, "title")
+        url = _text(entry, "link")
+        published_at = _parse_pub_date(_text(entry, "pubDate"))
 
-        if key in seen:
+        if not title or not url or not published_at:
             continue
 
-        seen.add(key)
-        unique_items.append(item)
+        if not is_ai_related_text(title, url):
+            continue
 
-    return unique_items
+        items.append({
+            "title": title,
+            "url": url,
+            "source": "techmeme",
+            "type": "news",
+            "published_at": published_at,
+            "score_hint": 0,
+            "summary_input": title,
+        })
+
+    return items
 
 
 async def fetch_techmeme_ai_stories(limit=10):
-    response = await fetch(TECHMEME_URL)
+    response = await fetch(TECHMEME_FEED_URL)
 
     if not response.ok:
-        raise RuntimeError(f"Techmeme request failed with status {response.status}")
+        raise RuntimeError(f"Techmeme feed request failed with status {response.status}")
 
-    html = await response.text()
-    snapshot_timestamp = _snapshot_timestamp(html)
-    parser = TechmemeLinkParser()
-    parser.feed(html)
-
-    items = [
-        _normalize_link(link, snapshot_timestamp=snapshot_timestamp)
-        for link in parser.links
-        if _is_story_link(link) and is_ai_related_text(link["title"], link["href"])
-    ]
-
-    return _dedupe_items(items)[:limit]
+    xml_text = await response.text()
+    return _parse_techmeme_feed(xml_text)[:limit]

@@ -1,10 +1,13 @@
 import json
+import time as time_module
 import traceback
+from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
 
 from workers import WorkerEntrypoint, Response
 
 from digest import build_digest, _news_window
-from nim import add_nim_summaries
+from nim import add_nim_summaries, finalize_news_for_publish
 from notion import filter_missing_digest_items, publish_digest_to_notion
 from sources.arxiv import fetch_arxiv_papers
 from sources.hackernews import fetch_hackernews_ai_stories
@@ -20,11 +23,72 @@ def json_response(data, status=200):
     )
 
 
+def _parse_publish_date_override(value, env):
+    if value in (None, ""):
+        return None
+
+    timezone_name = getattr(env, "DIGEST_TIMEZONE", None) or "UTC"
+
+    try:
+        digest_tz = ZoneInfo(timezone_name)
+    except Exception:
+        digest_tz = timezone.utc
+
+    try:
+        target_date = datetime.fromisoformat(str(value)).date()
+    except ValueError:
+        raise ValueError("Invalid date override. Use YYYY-MM-DD.")
+
+    # Any time during the target publish date yields the same previous-calendar-day window.
+    local_datetime = datetime.combine(target_date, time(12, 0), tzinfo=digest_tz)
+    return local_datetime.astimezone(timezone.utc)
+
+
+async def _build_publishable_digest(env, now_utc=None):
+    digest = await build_digest(env, now_utc=now_utc)
+    missing_digest = await filter_missing_digest_items(env, digest)
+    missing_digest = await add_nim_summaries(env, missing_digest)
+    missing_digest = await _prepare_digest_for_publish(missing_digest)
+    return digest, missing_digest
+
+
+async def _build_publishable_digest_with_timings(env, now_utc=None):
+    timings = {}
+
+    started_at = time_module.monotonic()
+    digest = await build_digest(env, now_utc=now_utc)
+    timings["build_digest_seconds"] = round(
+        time_module.monotonic() - started_at,
+        3,
+    )
+
+    started_at = time_module.monotonic()
+    missing_digest = await filter_missing_digest_items(env, digest)
+    timings["filter_missing_seconds"] = round(
+        time_module.monotonic() - started_at,
+        3,
+    )
+
+    started_at = time_module.monotonic()
+    missing_digest = await add_nim_summaries(env, missing_digest)
+    timings["add_nim_summaries_seconds"] = round(
+        time_module.monotonic() - started_at,
+        3,
+    )
+
+    started_at = time_module.monotonic()
+    missing_digest = await _prepare_digest_for_publish(missing_digest)
+    timings["prepare_publish_seconds"] = round(
+        time_module.monotonic() - started_at,
+        3,
+    )
+
+    return digest, missing_digest, timings
+
+
 class Default(WorkerEntrypoint):
     async def scheduled(self, controller, env=None, ctx=None):
-        digest = await build_digest(self.env)
-        missing_digest = await filter_missing_digest_items(self.env, digest)
-        missing_digest = await add_nim_summaries(self.env, missing_digest)
+        digest, missing_digest = await _build_publishable_digest(self.env)
         publish_result = await publish_digest_to_notion(self.env, missing_digest)
         print(json.dumps({
             "event": "daily_digest_published",
@@ -57,7 +121,7 @@ class Default(WorkerEntrypoint):
                 },
                 "config": {
                     "DIGEST_TIMEZONE": getattr(self.env, "DIGEST_TIMEZONE", None) or "UTC",
-                    "DIGEST_WINDOW_START_HOUR": getattr(self.env, "DIGEST_WINDOW_START_HOUR", None) or "8",
+                    "DIGEST_WINDOW_MODE": "previous_calendar_day",
                 },
             })
 
@@ -70,10 +134,10 @@ class Default(WorkerEntrypoint):
                 "publishes_to": "notion",
                 "sources": ["arXiv", "hacker news", "hugging face", "techmeme"],
                 "summarizer": "qwen/qwen3-next-80b-a3b-instruct via NVIDIA NIM",
-                "dedupe_key": "Same-day Date + Rank, plus cross-day normalized Link/Title history",
+                "dedupe_key": "Date + Rank, plus all-history Link, Title, and Summary checks",
                 "news_window": {
                     "timezone": news_window["timezone"],
-                    "start_hour": news_window["start_hour"],
+                    "kind": news_window["window_kind"],
                     "current_window_start": news_window["window_start_local"].isoformat(),
                     "current_window_end": news_window["window_end_local"].isoformat(),
                 },
@@ -138,20 +202,27 @@ class Default(WorkerEntrypoint):
 
         if method == "POST" and url.endswith("/debug/scheduled"):
             try:
-                digest = await build_digest(self.env)
-                missing_digest = await filter_missing_digest_items(self.env, digest)
-                missing_digest = await add_nim_summaries(self.env, missing_digest)
+                digest, missing_digest, timings = (
+                    await _build_publishable_digest_with_timings(self.env)
+                )
+                publish_started_at = time_module.monotonic()
                 publish_result = await publish_digest_to_notion(self.env, missing_digest)
+                timings["publish_to_notion_seconds"] = round(
+                    time_module.monotonic() - publish_started_at,
+                    3,
+                )
                 return json_response({
                     "ok": True,
                     "message": "Scheduled publish simulation succeeded",
                     "date": digest.get("date"),
+                    "content_date": digest.get("content_date"),
                     "papers": len(digest.get("papers", [])),
                     "news": len(digest.get("news", [])),
                     "missing_papers": len(missing_digest.get("papers", [])),
                     "missing_news": len(missing_digest.get("news", [])),
                     "notion": publish_result,
                     "stats": digest.get("stats", {}),
+                    "timings": timings,
                 })
             except Exception as exc:
                 return json_response({
@@ -166,19 +237,93 @@ class Default(WorkerEntrypoint):
 
         if method == "POST" and url.endswith("/publish-digest"):
             try:
-                digest = await build_digest(self.env)
-                missing_digest = await filter_missing_digest_items(self.env, digest)
-                missing_digest = await add_nim_summaries(self.env, missing_digest)
+                digest, missing_digest, timings = (
+                    await _build_publishable_digest_with_timings(self.env)
+                )
+                publish_started_at = time_module.monotonic()
                 publish_result = await publish_digest_to_notion(self.env, missing_digest)
+                timings["publish_to_notion_seconds"] = round(
+                    time_module.monotonic() - publish_started_at,
+                    3,
+                )
                 return json_response({
                     "ok": True,
                     "date": digest.get("date"),
+                    "content_date": digest.get("content_date"),
                     "papers": len(digest.get("papers", [])),
                     "news": len(digest.get("news", [])),
                     "missing_papers": len(missing_digest.get("papers", [])),
                     "missing_news": len(missing_digest.get("news", [])),
                     "notion": publish_result,
                     "stats": digest.get("stats", {}),
+                    "timings": timings,
+                })
+            except Exception as exc:
+                return json_response({
+                    "ok": False,
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(),
+                }, status=500)
+
+        if method == "POST" and url.endswith("/debug/publish-date"):
+            try:
+                body = await request.json()
+                raw_date = body.get("date") if isinstance(body, dict) else None
+                now_utc = _parse_publish_date_override(raw_date, self.env)
+                digest, missing_digest, timings = (
+                    await _build_publishable_digest_with_timings(
+                        self.env,
+                        now_utc=now_utc,
+                    )
+                )
+                publish_started_at = time_module.monotonic()
+                publish_result = await publish_digest_to_notion(self.env, missing_digest)
+                timings["publish_to_notion_seconds"] = round(
+                    time_module.monotonic() - publish_started_at,
+                    3,
+                )
+                return json_response({
+                    "ok": True,
+                    "message": "One-time publish succeeded",
+                    "date": digest.get("date"),
+                    "content_date": digest.get("content_date"),
+                    "papers": len(digest.get("papers", [])),
+                    "news": len(digest.get("news", [])),
+                    "missing_papers": len(missing_digest.get("papers", [])),
+                    "missing_news": len(missing_digest.get("news", [])),
+                    "notion": publish_result,
+                    "stats": digest.get("stats", {}),
+                    "timings": timings,
+                })
+            except Exception as exc:
+                return json_response({
+                    "ok": False,
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(),
+                }, status=500)
+
+        if method == "POST" and url.endswith("/debug/build-date"):
+            try:
+                body = await request.json()
+                raw_date = body.get("date") if isinstance(body, dict) else None
+                now_utc = _parse_publish_date_override(raw_date, self.env)
+                digest, missing_digest, timings = (
+                    await _build_publishable_digest_with_timings(
+                        self.env,
+                        now_utc=now_utc,
+                    )
+                )
+                return json_response({
+                    "ok": True,
+                    "message": "Digest build succeeded",
+                    "date": digest.get("date"),
+                    "content_date": digest.get("content_date"),
+                    "papers": len(digest.get("papers", [])),
+                    "news": len(digest.get("news", [])),
+                    "missing_papers": len(missing_digest.get("papers", [])),
+                    "missing_news": len(missing_digest.get("news", [])),
+                    "stats": digest.get("stats", {}),
+                    "timings": timings,
                 })
             except Exception as exc:
                 return json_response({
@@ -188,3 +333,7 @@ class Default(WorkerEntrypoint):
                 }, status=500)
 
         return json_response({"ok": False, "error": "Not found"}, status=404)
+
+
+async def _prepare_digest_for_publish(digest):
+    return finalize_news_for_publish(digest)

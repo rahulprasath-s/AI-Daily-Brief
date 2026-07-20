@@ -10,7 +10,7 @@ The project runs on Cloudflare Workers with a daily cron trigger, so it continue
 
 Every day, this project publishes:
 
-- Top 5 AI research papers
+- Top 5 latest AI research papers from arXiv
 - Top 10 AI news/model updates
 
 The final output is written into a Notion database with ranks like:
@@ -163,20 +163,21 @@ Do not commit `.dev.vars`.
 
 ## Digest Window Config
 
-The news section can be restricted to a fixed daily window using runtime vars:
+News is restricted to the previous calendar day using the digest timezone:
 
 ```text
 DIGEST_TIMEZONE=Europe/Berlin
-DIGEST_WINDOW_START_HOUR=8
 ```
 
-With this configuration, the digest includes only news whose normalized timestamp falls between the previous day at `08:00` and the current day at `07:59:59` in `Europe/Berlin`.
+With this configuration, the digest includes only news whose source timestamp falls between `00:00` (inclusive) and the next `00:00` (exclusive) for the previous calendar day in `Europe/Berlin`.
+
+Research papers use a seven-day lookback because arXiv announces submissions Sunday through Thursday and can publish a weekend batch after the papers' original submission dates. The Worker selects the newest unseen papers from that lookback and checks their normalized links and titles against all existing Notion history before publishing them. arXiv papers use their original `published` timestamp, not a later update timestamp.
 
 Notes:
 
 - Hacker News uses the story timestamp.
 - Hugging Face uses `lastModified` first, then `createdAt`.
-- Techmeme uses the snapshot timestamp shown on the fetched page.
+- Techmeme uses each RSS item's publication timestamp.
 
 ## Local Development
 
@@ -294,7 +295,7 @@ After deployment, Cloudflare runs the Worker automatically on the configured cro
 
 ## Duplicate Protection
 
-The Worker uses two layers of duplicate protection.
+The Worker uses multiple layers of duplicate protection.
 
 Before publishing, it checks whether a row already exists for the same:
 
@@ -304,13 +305,13 @@ Date + Rank
 
 That makes manual retries safe for the same digest day.
 
-It also filters out items that already appeared in recent Notion history by using a normalized item identity based on:
+It also filters out items that already appeared anywhere in Notion history by checking both normalized identities:
 
 ```text
-Link first, then Title as a fallback
+Link and Title
 ```
 
-This helps prevent the same paper or news item from appearing again on later days.
+News is additionally compared by summary similarity, both within the current digest and against all historical Notion descriptions. This catches the same underlying story when a publisher or aggregator uses a different URL or headline.
 
 ## NVIDIA NIM Usage
 
@@ -352,7 +353,7 @@ stat.ML
 
 Uses the public Hacker News Firebase API.
 
-The Worker scans recent top stories and keeps AI-related items based on keywords.
+The Worker queries Hacker News stories for the exact digest window in one paginated search request, then keeps AI-related items based on keywords and ranks them by engagement.
 
 ### Hugging Face
 
@@ -362,11 +363,7 @@ These are treated as news/model update items.
 
 ### Techmeme
 
-Uses lightweight HTML scraping.
-
-Because Techmeme does not provide a stable public API, this source is the most likely to need future maintenance if the page structure changes.
-
-For the digest window filter, Techmeme items use the snapshot timestamp shown on the fetched Techmeme page.
+Uses Techmeme's RSS feed so every candidate has its own publication timestamp for strict daily-window filtering.
 
 ## Project Structure
 

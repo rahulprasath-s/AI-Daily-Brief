@@ -3,6 +3,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from workers import fetch
 
+try:
+    from nim import is_publishable_news_item, summary_similarity
+except ModuleNotFoundError:
+    from src.nim import is_publishable_news_item, summary_similarity
+
 
 NOTION_PAGES_URL = "https://api.notion.com/v1/pages"
 NOTION_DATABASES_URL = "https://api.notion.com/v1/databases"
@@ -38,17 +43,29 @@ def _normalize_url(value):
 
 
 def item_identity(item):
+    identities = item_identities(item)
+
+    for identity_kind in ("url", "title"):
+        for identity in identities:
+            if identity[0] == identity_kind:
+                return identity
+
+    return None
+
+
+def item_identities(item):
+    identities = set()
     normalized_url = _normalize_url(item.get("url"))
 
     if normalized_url:
-        return ("url", normalized_url)
+        identities.add(("url", normalized_url))
 
     normalized_title = _normalize_title(item.get("title"))
 
     if normalized_title:
-        return ("title", normalized_title)
+        identities.add(("title", normalized_title))
 
-    return None
+    return identities
 
 
 def _short_description(item, max_words=100):
@@ -59,6 +76,20 @@ def _short_description(item, max_words=100):
         return " ".join(words)
 
     return " ".join(words[:max_words]).rstrip(".,;:") + "..."
+
+
+def _page_description(page):
+    description_property = page.get("properties", {}).get("Description", {})
+    rich_text = description_property.get("rich_text") or []
+
+    if not rich_text:
+        return ""
+
+    return " ".join(
+        text_item.get("plain_text", "")
+        for text_item in rich_text
+        if text_item.get("plain_text")
+    ).strip()
 
 
 def _source_name(item):
@@ -142,7 +173,7 @@ async def _create_page(notion_token, payload):
 
 def _rank_from_page(page):
     rank_property = page.get("properties", {}).get("Rank", {})
-    rich_text = rank_property.get("rich_text", [])
+    rich_text = rank_property.get("rich_text") or []
 
     if not rich_text:
         return ""
@@ -186,11 +217,12 @@ async def _query_existing_pages_for_date(notion_token, database_id, digest_date)
     }
 
 
-async def _query_recent_pages(notion_token, database_id, page_size=100, max_pages=5):
+async def _query_recent_pages(notion_token, database_id, page_size=100, max_pages=None):
     results = []
     start_cursor = None
+    pages_fetched = 0
 
-    for _ in range(max_pages):
+    while True:
         payload = {
             "page_size": page_size,
             "sorts": [
@@ -221,8 +253,12 @@ async def _query_recent_pages(notion_token, database_id, page_size=100, max_page
             raise RuntimeError(f"Notion database query failed: {data}")
 
         results.extend(data.get("results", []))
+        pages_fetched += 1
 
         if not data.get("has_more") or not data.get("next_cursor"):
+            break
+
+        if max_pages is not None and pages_fetched >= max_pages:
             break
 
         start_cursor = data.get("next_cursor")
@@ -232,7 +268,7 @@ async def _query_recent_pages(notion_token, database_id, page_size=100, max_page
 
 def _page_title(page):
     title_property = page.get("properties", {}).get("Title", {})
-    title = title_property.get("title", [])
+    title = title_property.get("title") or []
 
     if not title:
         return ""
@@ -244,17 +280,44 @@ def _existing_item_identities(pages):
     identities = set()
 
     for page in pages:
-        normalized_url = _normalize_url(_link_from_page(page))
-
-        if normalized_url:
-            identities.add(("url", normalized_url))
-
-        normalized_title = _normalize_title(_page_title(page))
-
-        if normalized_title:
-            identities.add(("title", normalized_title))
+        identities.update(item_identities({
+            "url": _link_from_page(page),
+            "title": _page_title(page),
+        }))
 
     return identities
+
+
+def _page_type(page):
+    type_property = page.get("properties", {}).get("Type", {})
+    return (type_property.get("select") or {}).get("name", "")
+
+
+def _page_as_item(page):
+    description = _page_description(page)
+    return {
+        "title": _page_title(page),
+        "url": _link_from_page(page),
+        "type": _page_type(page),
+        "summary": description,
+        "summary_input": description,
+    }
+
+
+async def get_published_items(env, page_size=100, max_pages=None):
+    notion_token = getattr(env, "NOTION_TOKEN", None)
+    database_id = getattr(env, "NOTION_DATABASE_ID", None)
+
+    if not notion_token or not database_id:
+        return []
+
+    pages = await _query_recent_pages(
+        notion_token,
+        database_id,
+        page_size=page_size,
+        max_pages=max_pages,
+    )
+    return [_page_as_item(page) for page in pages]
 
 
 async def publish_digest_to_notion(env, digest):
@@ -270,6 +333,15 @@ async def publish_digest_to_notion(env, digest):
         database_id,
         digest["date"],
     )
+    published_items = await get_published_items(env)
+    published_identities = set().union(*(
+        item_identities(item) for item in published_items
+    )) if published_items else set()
+    published_news_summaries = [
+        item.get("summary", "")
+        for item in published_items
+        if item.get("type") == "news" and item.get("summary")
+    ]
     created_pages = []
     skipped_pages = []
 
@@ -281,8 +353,39 @@ async def publish_digest_to_notion(env, digest):
                 "id": existing_page.get("id"),
                 "rank": item.get("rank"),
                 "title": _page_title(existing_page) or item.get("title"),
+                "reason": "duplicate_date_rank",
             })
             continue
+
+        identities = item_identities(item)
+        if identities & published_identities:
+            skipped_pages.append({
+                "rank": item.get("rank"),
+                "title": item.get("title"),
+                "reason": "duplicate_history_identity",
+            })
+            continue
+
+        if item.get("type") == "news":
+            if not is_publishable_news_item(item):
+                skipped_pages.append({
+                    "rank": item.get("rank"),
+                    "title": item.get("title"),
+                    "reason": "invalid_summary",
+                })
+                continue
+
+            if any(
+                summary_similarity(item.get("summary", ""), existing_summary) >= 0.7
+                for existing_summary in published_news_summaries
+                if existing_summary
+            ):
+                skipped_pages.append({
+                    "rank": item.get("rank"),
+                    "title": item.get("title"),
+                    "reason": "duplicate_history_summary",
+                })
+                continue
 
         payload = _notion_properties(database_id, digest["date"], item)
         created = await _create_page(notion_token, payload)
@@ -291,6 +394,9 @@ async def publish_digest_to_notion(env, digest):
             "rank": item.get("rank"),
             "title": item.get("title"),
         })
+        published_identities.update(identities)
+        if item.get("type") == "news":
+            published_news_summaries.append(item.get("summary", ""))
 
     return {
         "created": len(created_pages),
@@ -318,14 +424,14 @@ async def filter_missing_digest_items(env, digest):
         item for item in digest.get("papers", [])
         if (
             item.get("rank", "") not in existing_pages_by_rank
-            and item_identity(item) not in existing_identities
+            and not (item_identities(item) & existing_identities)
         )
     ]
     missing_news = [
         item for item in digest.get("news", [])
         if (
             item.get("rank", "") not in existing_pages_by_rank
-            and item_identity(item) not in existing_identities
+            and not (item_identities(item) & existing_identities)
         )
     ]
 
@@ -338,17 +444,15 @@ async def filter_missing_digest_items(env, digest):
     }
 
 
-async def get_recent_item_identities(env, page_size=100, max_pages=5):
-    notion_token = getattr(env, "NOTION_TOKEN", None)
-    database_id = getattr(env, "NOTION_DATABASE_ID", None)
-
-    if not notion_token or not database_id:
-        return set()
-
-    recent_pages = await _query_recent_pages(
-        notion_token,
-        database_id,
+async def get_recent_item_identities(env, page_size=100, max_pages=None):
+    published_items = await get_published_items(
+        env,
         page_size=page_size,
         max_pages=max_pages,
     )
-    return _existing_item_identities(recent_pages)
+    identities = set()
+
+    for item in published_items:
+        identities.update(item_identities(item))
+
+    return identities
