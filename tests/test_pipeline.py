@@ -27,6 +27,7 @@ from digest import (  # noqa: E402
 from nim import summary_similarity  # noqa: E402
 import notion  # noqa: E402
 from notion import item_identities  # noqa: E402
+from sources import arxiv  # noqa: E402
 from sources.techmeme import _parse_techmeme_feed  # noqa: E402
 
 
@@ -37,6 +38,48 @@ class Env:
 
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_arxiv_retries_transient_failure(self):
+        class FakeResponse:
+            def __init__(self, ok, status, body=""):
+                self.ok = ok
+                self.status = status
+                self._body = body
+
+            async def text(self):
+                return self._body
+
+        feed = """<?xml version="1.0"?>
+        <feed xmlns="http://www.w3.org/2005/Atom"><entry>
+          <id>http://arxiv.org/abs/2607.18237v1</id>
+          <title>A new AI paper</title>
+          <summary>Paper abstract.</summary>
+          <published>2026-07-20T17:59:51Z</published>
+          <updated>2026-07-20T17:59:51Z</updated>
+          <author><name>Researcher</name></author>
+        </entry></feed>"""
+
+        with (
+            patch.object(
+                arxiv,
+                "fetch",
+                new=AsyncMock(side_effect=[
+                    FakeResponse(False, 503),
+                    FakeResponse(True, 200, feed),
+                ]),
+            ) as fetch_mock,
+            patch.object(
+                arxiv.asyncio,
+                "sleep",
+                new=AsyncMock(),
+            ) as sleep_mock,
+        ):
+            papers = await arxiv.fetch_arxiv_papers(limit=1)
+
+        self.assertEqual(len(papers), 1)
+        self.assertEqual(papers[0]["title"], "A new AI paper")
+        self.assertEqual(fetch_mock.await_count, 2)
+        sleep_mock.assert_awaited_once_with(1)
+
     def test_window_is_exact_previous_berlin_calendar_day(self):
         window = _news_window(
             Env(),

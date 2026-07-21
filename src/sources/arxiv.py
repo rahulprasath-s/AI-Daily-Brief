@@ -1,3 +1,4 @@
+import asyncio
 from urllib.parse import urlencode
 import xml.etree.ElementTree as ET
 
@@ -6,6 +7,7 @@ from js import fetch
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
 ATOM_NAMESPACE = {"atom": "http://www.w3.org/2005/Atom"}
+ARXIV_RETRY_DELAYS_SECONDS = (1, 3, 7)
 
 
 def _text(entry, path):
@@ -57,10 +59,26 @@ async def fetch_arxiv_papers(limit=10):
         "start": 0,
         "max_results": limit,
     })
-    response = await fetch(f"{ARXIV_API_URL}?{query}")
+    url = f"{ARXIV_API_URL}?{query}"
+    attempts = len(ARXIV_RETRY_DELAYS_SECONDS) + 1
 
-    if not response.ok:
-        raise RuntimeError(f"arXiv request failed with status {response.status}")
+    for attempt in range(attempts):
+        try:
+            response = await fetch(url)
 
-    xml_text = await response.text()
-    return _parse_arxiv_feed(xml_text)
+            if not response.ok:
+                raise RuntimeError(
+                    f"arXiv request failed with status {response.status}"
+                )
+
+            papers = _parse_arxiv_feed(await response.text())
+
+            if not papers:
+                raise RuntimeError("arXiv returned an empty feed")
+
+            return papers
+        except Exception:
+            if attempt >= len(ARXIV_RETRY_DELAYS_SECONDS):
+                raise
+
+            await asyncio.sleep(ARXIV_RETRY_DELAYS_SECONDS[attempt])

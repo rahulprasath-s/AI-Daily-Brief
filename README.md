@@ -4,7 +4,7 @@ AI Daily Brief is a fully automated daily AI news and research brief.
 
 It collects AI-related research papers and news from multiple sources, ranks the most important items, summarizes them using NVIDIA NIM, and publishes the final brief to a Notion database.
 
-The project runs on Cloudflare Workers with a daily cron trigger, so it continues working even when your laptop is off.
+The project runs on Cloudflare Workers with a daily cron trigger and an idempotent reconciliation trigger, so it continues working even when your laptop is off and can recover from a transient source failure.
 
 ## What This Project Does
 
@@ -123,15 +123,16 @@ news
 
 ## Cloudflare Cron Schedule
 
-The Worker is configured to run daily using Cloudflare Cron Triggers.
+The Worker is configured with two daily Cloudflare Cron Triggers.
 
 Current schedule:
 
 ```text
 0 6 * * *
+0 12 * * *
 ```
 
-This runs every day at `06:00 UTC`.
+The primary digest runs at `06:00 UTC`. The `12:00 UTC` reconciliation run uses the same Date + Rank and all-history identity guards, so it adds only items that were missing from the primary run. arXiv requests also retry transient failures with short backoff delays before a run is treated as unavailable.
 
 ## Required Secrets
 
