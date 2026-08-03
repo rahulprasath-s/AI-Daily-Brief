@@ -102,7 +102,7 @@ The Notion database should contain these properties:
 | Description | Text / Rich text | Summary |
 | Source | Select | Source name |
 | Link | URL | Original source link |
-| Status | Status | Optional Notion workflow status |
+| Status | Status | Defaults to `NOT YET` for every published item |
 | Rank | Text | `P1-P5` or `N1-N10` |
 
 Recommended `Source` select options:

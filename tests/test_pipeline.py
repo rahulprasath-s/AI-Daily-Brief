@@ -26,7 +26,7 @@ from digest import (  # noqa: E402
 )
 from nim import finalize_news_for_publish, summary_similarity  # noqa: E402
 import notion  # noqa: E402
-from notion import item_identities  # noqa: E402
+from notion import _notion_properties, item_identities  # noqa: E402
 from sources import arxiv  # noqa: E402
 from sources.techmeme import _parse_techmeme_feed  # noqa: E402
 
@@ -272,6 +272,24 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             "summary": "",
             "summary_input": "",
         })
+
+    def test_new_notion_rows_default_to_not_yet(self):
+        payload = _notion_properties(
+            "test-database",
+            "2026-08-04",
+            {
+                "type": "news",
+                "title": "AI update",
+                "source": "hacker news",
+                "url": "https://example.com/ai-update",
+                "rank": "N1",
+            },
+        )
+
+        self.assertEqual(
+            payload["properties"]["Status"],
+            {"status": {"name": "NOT YET"}},
+        )
 
     def test_summary_similarity_detects_shared_story_content(self):
         original = (

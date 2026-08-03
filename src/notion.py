@@ -12,6 +12,7 @@ except ModuleNotFoundError:
 NOTION_PAGES_URL = "https://api.notion.com/v1/pages"
 NOTION_DATABASES_URL = "https://api.notion.com/v1/databases"
 NOTION_VERSION = "2022-06-28"
+DEFAULT_STATUS = "NOT YET"
 
 
 def _truncate(value, max_length=1900):
@@ -134,6 +135,9 @@ def _notion_properties(database_id, digest_date, item):
             },
             "Source": {
                 "select": {"name": _source_name(item)},
+            },
+            "Status": {
+                "status": {"name": DEFAULT_STATUS},
             },
             "Link": {
                 "url": item.get("url"),
