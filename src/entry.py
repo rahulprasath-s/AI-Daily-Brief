@@ -8,7 +8,11 @@ from workers import WorkerEntrypoint, Response
 
 from digest import build_digest, _news_window
 from nim import add_nim_summaries, finalize_news_for_publish
-from notion import filter_missing_digest_items, publish_digest_to_notion
+from notion import (
+    filter_missing_digest_items,
+    get_published_items,
+    publish_digest_to_notion,
+)
 from sources.arxiv import fetch_arxiv_papers
 from sources.hackernews import fetch_hackernews_ai_stories
 from sources.huggingface import fetch_huggingface_ai_models
@@ -45,25 +49,49 @@ def _parse_publish_date_override(value, env):
 
 
 async def _build_publishable_digest(env, now_utc=None):
-    digest = await build_digest(env, now_utc=now_utc)
-    missing_digest = await filter_missing_digest_items(env, digest)
+    published_items = await get_published_items(env)
+    digest = await build_digest(
+        env,
+        now_utc=now_utc,
+        published_items=published_items,
+    )
+    missing_digest = await filter_missing_digest_items(
+        env,
+        digest,
+        published_items=published_items,
+    )
     missing_digest = await add_nim_summaries(env, missing_digest)
     missing_digest = await _prepare_digest_for_publish(missing_digest)
-    return digest, missing_digest
+    return digest, missing_digest, published_items
 
 
 async def _build_publishable_digest_with_timings(env, now_utc=None):
     timings = {}
 
     started_at = time_module.monotonic()
-    digest = await build_digest(env, now_utc=now_utc)
+    published_items = await get_published_items(env)
+    timings["load_notion_history_seconds"] = round(
+        time_module.monotonic() - started_at,
+        3,
+    )
+
+    started_at = time_module.monotonic()
+    digest = await build_digest(
+        env,
+        now_utc=now_utc,
+        published_items=published_items,
+    )
     timings["build_digest_seconds"] = round(
         time_module.monotonic() - started_at,
         3,
     )
 
     started_at = time_module.monotonic()
-    missing_digest = await filter_missing_digest_items(env, digest)
+    missing_digest = await filter_missing_digest_items(
+        env,
+        digest,
+        published_items=published_items,
+    )
     timings["filter_missing_seconds"] = round(
         time_module.monotonic() - started_at,
         3,
@@ -83,13 +111,19 @@ async def _build_publishable_digest_with_timings(env, now_utc=None):
         3,
     )
 
-    return digest, missing_digest, timings
+    return digest, missing_digest, published_items, timings
 
 
 class Default(WorkerEntrypoint):
     async def scheduled(self, controller, env=None, ctx=None):
-        digest, missing_digest = await _build_publishable_digest(self.env)
-        publish_result = await publish_digest_to_notion(self.env, missing_digest)
+        digest, missing_digest, published_items = await _build_publishable_digest(
+            self.env
+        )
+        publish_result = await publish_digest_to_notion(
+            self.env,
+            missing_digest,
+            published_items=published_items,
+        )
         print(json.dumps({
             "event": "daily_digest_published",
             "date": digest.get("date"),
@@ -203,11 +237,15 @@ class Default(WorkerEntrypoint):
 
         if method == "POST" and url.endswith("/debug/scheduled"):
             try:
-                digest, missing_digest, timings = (
+                digest, missing_digest, published_items, timings = (
                     await _build_publishable_digest_with_timings(self.env)
                 )
                 publish_started_at = time_module.monotonic()
-                publish_result = await publish_digest_to_notion(self.env, missing_digest)
+                publish_result = await publish_digest_to_notion(
+                    self.env,
+                    missing_digest,
+                    published_items=published_items,
+                )
                 timings["publish_to_notion_seconds"] = round(
                     time_module.monotonic() - publish_started_at,
                     3,
@@ -238,11 +276,15 @@ class Default(WorkerEntrypoint):
 
         if method == "POST" and url.endswith("/publish-digest"):
             try:
-                digest, missing_digest, timings = (
+                digest, missing_digest, published_items, timings = (
                     await _build_publishable_digest_with_timings(self.env)
                 )
                 publish_started_at = time_module.monotonic()
-                publish_result = await publish_digest_to_notion(self.env, missing_digest)
+                publish_result = await publish_digest_to_notion(
+                    self.env,
+                    missing_digest,
+                    published_items=published_items,
+                )
                 timings["publish_to_notion_seconds"] = round(
                     time_module.monotonic() - publish_started_at,
                     3,
@@ -271,14 +313,18 @@ class Default(WorkerEntrypoint):
                 body = await request.json()
                 raw_date = body.get("date") if isinstance(body, dict) else None
                 now_utc = _parse_publish_date_override(raw_date, self.env)
-                digest, missing_digest, timings = (
+                digest, missing_digest, published_items, timings = (
                     await _build_publishable_digest_with_timings(
                         self.env,
                         now_utc=now_utc,
                     )
                 )
                 publish_started_at = time_module.monotonic()
-                publish_result = await publish_digest_to_notion(self.env, missing_digest)
+                publish_result = await publish_digest_to_notion(
+                    self.env,
+                    missing_digest,
+                    published_items=published_items,
+                )
                 timings["publish_to_notion_seconds"] = round(
                     time_module.monotonic() - publish_started_at,
                     3,
@@ -308,7 +354,7 @@ class Default(WorkerEntrypoint):
                 body = await request.json()
                 raw_date = body.get("date") if isinstance(body, dict) else None
                 now_utc = _parse_publish_date_override(raw_date, self.env)
-                digest, missing_digest, timings = (
+                digest, missing_digest, _published_items, timings = (
                     await _build_publishable_digest_with_timings(
                         self.env,
                         now_utc=now_utc,

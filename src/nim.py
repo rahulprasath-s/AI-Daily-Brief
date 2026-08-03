@@ -608,8 +608,16 @@ def finalize_news_for_publish(digest, similarity_threshold=SUMMARY_SIMILARITY_TH
 
         unique_news.append(item)
 
-    for index, item in enumerate(unique_news, start=1):
-        item["rank"] = f"N{index}"
+    occupied_ranks = set(digest.get("existing_news_ranks", []))
+    available_ranks = [
+        f"N{index}"
+        for index in range(1, 11)
+        if f"N{index}" not in occupied_ranks
+    ]
+    unique_news = unique_news[:len(available_ranks)]
+
+    for item, rank in zip(unique_news, available_ranks):
+        item["rank"] = rank
 
     digest["news"] = unique_news
     stats = dict(digest.get("stats", {}))

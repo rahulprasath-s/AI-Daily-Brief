@@ -24,7 +24,7 @@ from digest import (  # noqa: E402
     _news_window,
     _paper_lookback_window,
 )
-from nim import summary_similarity  # noqa: E402
+from nim import finalize_news_for_publish, summary_similarity  # noqa: E402
 import notion  # noqa: E402
 from notion import item_identities  # noqa: E402
 from sources import arxiv  # noqa: E402
@@ -263,6 +263,9 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         }
 
         self.assertEqual(notion._page_as_item(page), {
+            "id": None,
+            "date": "",
+            "rank": "",
             "title": "",
             "url": "",
             "type": "",
@@ -281,6 +284,31 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertGreaterEqual(summary_similarity(original, syndicated), 0.7)
+
+    def test_reconciliation_assigns_next_free_news_ranks(self):
+        digest = {
+            "existing_news_ranks": ["N1", "N2", "N3"],
+            "news": [{
+                "type": "news",
+                "title": "New accelerator launch",
+                "summary": "A chip vendor launched an accelerator for inference clusters.",
+            }, {
+                "type": "news",
+                "title": "Robotics research result",
+                "summary": "Researchers demonstrated dexterous manipulation using tactile sensors.",
+            }, {
+                "type": "news",
+                "title": "Speech model release",
+                "summary": "An open multilingual speech model improves low-resource transcription.",
+            }],
+        }
+
+        result = finalize_news_for_publish(digest)
+
+        self.assertEqual(
+            [item["rank"] for item in result["news"]],
+            ["N4", "N5", "N6"],
+        )
 
     def test_techmeme_uses_each_rss_item_publication_time(self):
         feed = """<?xml version="1.0"?>
@@ -338,6 +366,56 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["created"], 0)
         self.assertEqual(result["skipped_pages"][0]["reason"], "duplicate_history_summary")
+        create_page.assert_not_awaited()
+
+    async def test_prefetched_history_avoids_redundant_notion_queries(self):
+        published_items = [{
+            "id": "existing-page",
+            "date": "2026-08-03",
+            "rank": "P1",
+            "type": "paper",
+            "title": "Existing paper",
+            "url": "https://example.com/existing-paper",
+            "summary": "Existing summary",
+        }]
+        digest = {
+            "date": "2026-08-03",
+            "papers": [{
+                "rank": "P1",
+                "type": "paper",
+                "title": "Replacement paper",
+                "url": "https://example.com/replacement-paper",
+            }],
+            "news": [],
+        }
+
+        with (
+            patch.object(
+                notion,
+                "_query_existing_pages_for_date",
+                new=AsyncMock(side_effect=AssertionError("unexpected date query")),
+            ),
+            patch.object(
+                notion,
+                "get_published_items",
+                new=AsyncMock(side_effect=AssertionError("unexpected history query")),
+            ),
+            patch.object(notion, "_create_page", new=AsyncMock()) as create_page,
+        ):
+            filtered = await notion.filter_missing_digest_items(
+                Env(),
+                digest,
+                published_items=published_items,
+            )
+            result = await notion.publish_digest_to_notion(
+                Env(),
+                digest,
+                published_items=published_items,
+            )
+
+        self.assertEqual(filtered["papers"], [])
+        self.assertEqual(result["created"], 0)
+        self.assertEqual(result["skipped_pages"][0]["reason"], "duplicate_date_rank")
         create_page.assert_not_awaited()
 
     async def test_one_failed_source_does_not_suppress_other_news(self):

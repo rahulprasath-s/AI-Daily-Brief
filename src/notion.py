@@ -293,9 +293,17 @@ def _page_type(page):
     return (type_property.get("select") or {}).get("name", "")
 
 
+def _page_date(page):
+    date_property = page.get("properties", {}).get("Date", {})
+    return (date_property.get("date") or {}).get("start", "")
+
+
 def _page_as_item(page):
     description = _page_description(page)
     return {
+        "id": page.get("id"),
+        "date": _page_date(page),
+        "rank": _rank_from_page(page),
         "title": _page_title(page),
         "url": _link_from_page(page),
         "type": _page_type(page),
@@ -320,7 +328,15 @@ async def get_published_items(env, page_size=100, max_pages=None):
     return [_page_as_item(page) for page in pages]
 
 
-async def publish_digest_to_notion(env, digest):
+def _published_items_by_rank_for_date(published_items, digest_date):
+    return {
+        item.get("rank", ""): item
+        for item in published_items
+        if item.get("date") == digest_date and item.get("rank")
+    }
+
+
+async def publish_digest_to_notion(env, digest, published_items=None):
     notion_token = getattr(env, "NOTION_TOKEN", None)
     database_id = getattr(env, "NOTION_DATABASE_ID", None)
 
@@ -328,12 +344,18 @@ async def publish_digest_to_notion(env, digest):
         raise RuntimeError("Missing NOTION_TOKEN or NOTION_DATABASE_ID")
 
     items = [*digest.get("papers", []), *digest.get("news", [])]
-    existing_pages_by_rank = await _query_existing_pages_for_date(
-        notion_token,
-        database_id,
-        digest["date"],
-    )
-    published_items = await get_published_items(env)
+    if published_items is None:
+        existing_pages_by_rank = await _query_existing_pages_for_date(
+            notion_token,
+            database_id,
+            digest["date"],
+        )
+        published_items = await get_published_items(env)
+    else:
+        existing_pages_by_rank = _published_items_by_rank_for_date(
+            published_items,
+            digest["date"],
+        )
     published_identities = set().union(*(
         item_identities(item) for item in published_items
     )) if published_items else set()
@@ -352,7 +374,11 @@ async def publish_digest_to_notion(env, digest):
             skipped_pages.append({
                 "id": existing_page.get("id"),
                 "rank": item.get("rank"),
-                "title": _page_title(existing_page) or item.get("title"),
+                "title": (
+                    existing_page.get("title")
+                    or _page_title(existing_page)
+                    or item.get("title")
+                ),
                 "reason": "duplicate_date_rank",
             })
             continue
@@ -406,19 +432,30 @@ async def publish_digest_to_notion(env, digest):
     }
 
 
-async def filter_missing_digest_items(env, digest):
+async def filter_missing_digest_items(env, digest, published_items=None):
     notion_token = getattr(env, "NOTION_TOKEN", None)
     database_id = getattr(env, "NOTION_DATABASE_ID", None)
 
     if not notion_token or not database_id:
         raise RuntimeError("Missing NOTION_TOKEN or NOTION_DATABASE_ID")
 
-    existing_pages_by_rank = await _query_existing_pages_for_date(
-        notion_token,
-        database_id,
-        digest["date"],
-    )
-    existing_identities = _existing_item_identities(existing_pages_by_rank.values())
+    if published_items is None:
+        existing_pages_by_rank = await _query_existing_pages_for_date(
+            notion_token,
+            database_id,
+            digest["date"],
+        )
+        existing_identities = _existing_item_identities(
+            existing_pages_by_rank.values()
+        )
+    else:
+        existing_pages_by_rank = _published_items_by_rank_for_date(
+            published_items,
+            digest["date"],
+        )
+        existing_identities = set().union(*(
+            item_identities(item) for item in existing_pages_by_rank.values()
+        )) if existing_pages_by_rank else set()
 
     missing_papers = [
         item for item in digest.get("papers", [])
@@ -429,11 +466,11 @@ async def filter_missing_digest_items(env, digest):
     ]
     missing_news = [
         item for item in digest.get("news", [])
-        if (
-            item.get("rank", "") not in existing_pages_by_rank
-            and not (item_identities(item) & existing_identities)
-        )
+        if not (item_identities(item) & existing_identities)
     ]
+    existing_news_ranks = sorted(
+        rank for rank in existing_pages_by_rank if rank.startswith("N")
+    )
 
     return {
         **digest,
@@ -441,6 +478,7 @@ async def filter_missing_digest_items(env, digest):
         "news": missing_news,
         "existing_count": len(existing_pages_by_rank),
         "existing_same_day_identity_count": len(existing_identities),
+        "existing_news_ranks": existing_news_ranks,
     }
 
 

@@ -362,11 +362,12 @@ def _paper_lookback_window(news_window):
     }
 
 
-async def build_digest(env=None, now_utc=None):
+async def build_digest(env=None, now_utc=None, published_items=None):
     digest_env = env
     window = _news_window(digest_env, now_utc=now_utc)
     paper_window = _paper_lookback_window(window)
-    published_items = await get_published_items(env) if env else []
+    if published_items is None:
+        published_items = await get_published_items(env) if env else []
     published_identities = set()
 
     for item in published_items:
