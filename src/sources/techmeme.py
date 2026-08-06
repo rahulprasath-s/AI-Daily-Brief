@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 
-from js import fetch
+from http_client import fetch
 
 from filtering import is_ai_related_text
 

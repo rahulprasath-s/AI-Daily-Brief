@@ -1,7 +1,7 @@
 import json
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from workers import fetch
+from http_client import fetch, response_json
 
 try:
     from nim import is_publishable_news_item, summary_similarity
@@ -167,7 +167,7 @@ async def _create_page(notion_token, payload):
         body=json.dumps(payload),
     )
 
-    data = await response.json()
+    data = await response_json(response)
 
     if not response.ok:
         raise RuntimeError(f"Notion page create failed: {data}")
@@ -209,7 +209,7 @@ async def _query_existing_pages_for_date(notion_token, database_id, digest_date)
         }),
     )
 
-    data = await response.json()
+    data = await response_json(response)
 
     if not response.ok:
         raise RuntimeError(f"Notion database query failed: {data}")
@@ -251,7 +251,7 @@ async def _query_recent_pages(notion_token, database_id, page_size=100, max_page
             body=json.dumps(payload),
         )
 
-        data = await response.json()
+        data = await response_json(response)
 
         if not response.ok:
             raise RuntimeError(f"Notion database query failed: {data}")

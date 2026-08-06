@@ -4,7 +4,7 @@ import json
 import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from workers import fetch
+from http_client import fetch
 
 
 NVIDIA_NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"

@@ -69,3 +69,4 @@ python_modules/
 .venv-workers/
 __pycache__/
 *.pyc
+*.egg-info/

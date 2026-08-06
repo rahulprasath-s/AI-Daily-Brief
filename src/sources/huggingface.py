@@ -1,6 +1,6 @@
 from urllib.parse import urlencode
 
-from js import fetch
+from http_client import fetch, response_json
 
 from filtering import is_ai_related_text
 
@@ -14,7 +14,7 @@ async def _fetch_json(url):
     if not response.ok:
         raise RuntimeError(f"Hugging Face request failed with status {response.status}")
 
-    return (await response.json()).to_py()
+    return await response_json(response)
 
 
 def _normalize_model(model):

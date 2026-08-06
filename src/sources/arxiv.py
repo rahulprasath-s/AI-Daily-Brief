@@ -2,7 +2,7 @@ import asyncio
 from urllib.parse import urlencode
 import xml.etree.ElementTree as ET
 
-from js import fetch
+from http_client import fetch
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"

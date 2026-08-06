@@ -4,7 +4,7 @@ AI Daily Brief is a fully automated daily AI news and research brief.
 
 It collects AI-related research papers and news from multiple sources, ranks the most important items, summarizes them using NVIDIA NIM, and publishes the final brief to a Notion database.
 
-The project runs on Cloudflare Workers with a daily cron trigger and an idempotent reconciliation trigger, so it continues working even when your laptop is off and can recover from a transient source failure.
+GitHub Actions runs the publishing pipeline twice daily. An optional Cloudflare Worker deployment provides health, status, and source-debug endpoints, but does not own the production schedule.
 
 ## What This Project Does
 
@@ -34,10 +34,10 @@ Each source is normalized into a common item format before ranking and publishin
 The full pipeline looks like this:
 
 ```text
-Cloudflare Cron Trigger
+GitHub Actions Schedule
         |
         v
-Cloudflare Worker
+Python CLI
         |
         v
 Collect from arXiv, Hacker News, Hugging Face, Techmeme
@@ -65,8 +65,7 @@ Publish missing rows to Notion
 
 - Runs automatically every day in the cloud
 - Works even when the laptop is off
-- Uses Cloudflare Workers free tier
-- Uses Cloudflare Cron Triggers
+- Uses GitHub Actions for free scheduled execution
 - Collects papers from arXiv
 - Collects AI stories from Hacker News
 - Collects trending model updates from Hugging Face
@@ -80,8 +79,8 @@ Publish missing rows to Notion
 ## Tech Stack
 
 - Python
-- Cloudflare Workers
-- Cloudflare Cron Triggers
+- GitHub Actions
+- Cloudflare Workers for optional HTTP/debug endpoints
 - Notion API
 - NVIDIA NIM API
 - arXiv API
@@ -121,9 +120,9 @@ paper
 news
 ```
 
-## Cloudflare Cron Schedule
+## GitHub Actions Schedule
 
-The Worker is configured with two daily Cloudflare Cron Triggers.
+The workflow in `.github/workflows/daily-brief.yml` has two daily schedules.
 
 Current schedule:
 
@@ -132,11 +131,11 @@ Current schedule:
 0 12 * * *
 ```
 
-The primary digest runs at `06:00 UTC`. The `12:00 UTC` reconciliation run uses the same Date + Rank and all-history identity guards, so it adds only items that were missing from the primary run. arXiv requests also retry transient failures with short backoff delays before a run is treated as unavailable.
+The primary digest runs at `06:00 UTC`. The `12:00 UTC` reconciliation run uses the same Date + Rank and all-history identity guards, so it adds only items that were missing from the primary run. The workflow can also be started manually from the repository's **Actions** tab. arXiv requests retry transient failures before a run is treated as unavailable.
 
 ## Required Secrets
 
-The Worker needs these secrets:
+The publishing workflow needs these secrets:
 
 ```text
 NOTION_TOKEN
@@ -144,15 +143,17 @@ NOTION_DATABASE_ID
 NVIDIA_NIM_API_KEY
 ```
 
-Add them to Cloudflare using Wrangler:
+Add them at **GitHub repository → Settings → Secrets and variables → Actions → New repository secret**.
 
-```bash
-wrangler secret put NOTION_TOKEN
-wrangler secret put NOTION_DATABASE_ID
-wrangler secret put NVIDIA_NIM_API_KEY
+Use these exact names:
+
+```text
+NOTION_TOKEN
+NOTION_DATABASE_ID
+NVIDIA_NIM_API_KEY
 ```
 
-For local development, create a `.dev.vars` file:
+For local CLI execution, export the same variables in your shell. Cloudflare local development can continue using `.dev.vars`:
 
 ```bash
 NOTION_TOKEN=your_notion_token_here
@@ -185,20 +186,24 @@ Notes:
 Install dependencies:
 
 ```bash
-npm install
+python -m pip install .
 ```
 
-Run the Worker locally:
+Build a digest locally without publishing:
 
 ```bash
-wrangler dev
+python src/cli.py
 ```
 
-The local server usually runs at:
+Publish missing rows locally:
 
-```text
-http://localhost:8787
+```bash
+python src/cli.py --publish
 ```
+
+The `--publish` flag is intentionally required. Without it, the CLI does not create Notion rows.
+
+To run the optional Cloudflare HTTP endpoints locally, install the Node dependencies and run `npm run dev`.
 
 ## Testing Locally
 
@@ -286,13 +291,15 @@ POST /debug/scheduled
 
 ## Deployment
 
-Deploy to Cloudflare:
+Commit and push `.github/workflows/daily-brief.yml` to the repository's default branch. Add the three GitHub Actions secrets, then run **AI Daily Brief** once using **Actions → Run workflow**.
+
+The Cloudflare Worker can still be deployed for its HTTP/debug endpoints:
 
 ```bash
-wrangler deploy
+npm run deploy
 ```
 
-After deployment, Cloudflare runs the Worker automatically on the configured cron schedule.
+Its cron list is intentionally empty to prevent duplicate publishing and free-tier CPU failures.
 
 ## Duplicate Protection
 
@@ -370,7 +377,9 @@ Uses Techmeme's RSS feed so every candidate has its own publication timestamp fo
 
 ```text
 src/
+  cli.py
   entry.py
+  http_client.py
   digest.py
   filtering.py
   nim.py
@@ -384,6 +393,7 @@ src/
 wrangler.jsonc
 package.json
 pyproject.toml
+.github/workflows/daily-brief.yml
 ```
 
 ## File Overview
@@ -396,8 +406,15 @@ Handles:
 
 - HTTP routes
 - debug endpoints
-- scheduled cron execution
 - publish flow orchestration
+
+### `src/cli.py`
+
+Main GitHub Actions and local command-line entrypoint. It defaults to a dry run and publishes only when `--publish` is supplied.
+
+### `src/http_client.py`
+
+Provides one async HTTP interface for both standard CPython and Cloudflare's Python runtime.
 
 ### `src/digest.py`
 
@@ -480,7 +497,7 @@ This command should print nothing.
 
 This project currently supports:
 
-- cloud-hosted daily execution
+- GitHub Actions scheduled execution
 - source collection
 - AI filtering
 - deduplication
@@ -500,5 +517,5 @@ Possible next improvements:
 - create one daily summary page in Notion
 - improve Techmeme parsing
 - store run logs in a database or Notion log table
-- add GitHub Actions checks
+- add GitHub Actions failure notifications
 - add tests for source parsers

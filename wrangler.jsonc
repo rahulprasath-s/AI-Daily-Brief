@@ -17,10 +17,7 @@
 		"DIGEST_TIMEZONE": "Europe/Berlin"
 	},
 	"triggers": {
-		"crons": [
-			"0 6 * * *",
-			"0 12 * * *"
-		]
+		"crons": []
 	}
 	/**
 	 * Smart Placement

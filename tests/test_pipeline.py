@@ -18,6 +18,8 @@ js_module.fetch = None
 sys.modules.setdefault("js", js_module)
 
 import digest  # noqa: E402
+import cli  # noqa: E402
+import http_client  # noqa: E402
 from digest import (  # noqa: E402
     _exclude_previously_published,
     _filter_items_to_window,
@@ -38,6 +40,51 @@ class Env:
 
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_portable_response_parses_json(self):
+        response = http_client._PortableResponse(200, '{"ok": true}')
+
+        self.assertTrue(response.ok)
+        self.assertEqual(await http_client.response_json(response), {"ok": True})
+
+    async def test_cli_dry_run_never_publishes(self):
+        digest_result = {
+            "date": "2026-08-06",
+            "content_date": "2026-08-05",
+            "papers": [],
+            "news": [],
+            "stats": {},
+        }
+
+        with (
+            patch.object(cli, "get_published_items", new=AsyncMock(return_value=[])),
+            patch.object(cli, "build_digest", new=AsyncMock(return_value=digest_result)),
+            patch.object(
+                cli,
+                "filter_missing_digest_items",
+                new=AsyncMock(return_value=digest_result),
+            ),
+            patch.object(
+                cli,
+                "add_nim_summaries",
+                new=AsyncMock(return_value=digest_result),
+            ),
+            patch.object(
+                cli,
+                "finalize_news_for_publish",
+                return_value=digest_result,
+            ),
+            patch.object(
+                cli,
+                "publish_digest_to_notion",
+                new=AsyncMock(),
+            ) as publish_mock,
+        ):
+            result = await cli.run_digest(Env(), publish=False)
+
+        self.assertEqual(result["mode"], "dry-run")
+        self.assertIsNone(result["notion"])
+        publish_mock.assert_not_awaited()
+
     async def test_arxiv_retries_transient_failure(self):
         class FakeResponse:
             def __init__(self, ok, status, body=""):
