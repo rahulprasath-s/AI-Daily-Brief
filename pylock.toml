@@ -3,6 +3,11 @@ created-by = "uv"
 requires-python = ">=3.13.2"
 
 [[packages]]
+name = "certifi"
+version = "2026.7.22"
+wheels = [{ url = "https://files.pythonhosted.org/packages/0b/a7/71ac2cff56fec219ed242bb11b8efb69fcc4bec75db06fb7bfe35de520e6/certifi-2026.7.22-py3-none-any.whl", upload-time = 2026-07-22T03:35:11Z, size = 136983, hashes = { sha256 = "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775" } }]
+
+[[packages]]
 name = "tzdata"
 version = "2026.2"
 wheels = [{ url = "https://files.pythonhosted.org/packages/ce/e4/dccd7f47c4b64213ac01ef921a1337ee6e30e8c6466046018326977efd95/tzdata-2026.2-py2.py3-none-any.whl", upload-time = 2026-04-24T15:22:05Z, size = 349321, hashes = { sha256 = "bbe9af844f658da81a5f95019480da3a89415801f6cc966806612cc7169bffe7" } }]
