@@ -40,6 +40,16 @@ class Env:
 
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
+    def test_cli_publish_date_uses_digest_timezone(self):
+        self.assertEqual(
+            cli.parse_publish_date("2026-08-04", Env()),
+            datetime(2026, 8, 4, 10, tzinfo=timezone.utc),
+        )
+
+    def test_cli_rejects_invalid_publish_date(self):
+        with self.assertRaisesRegex(ValueError, "YYYY-MM-DD"):
+            cli.parse_publish_date("August 4", Env())
+
     async def test_portable_response_parses_json(self):
         response = http_client._PortableResponse(200, '{"ok": true}')
 

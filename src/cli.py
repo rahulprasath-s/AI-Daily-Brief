@@ -4,7 +4,9 @@ import json
 import os
 import time
 import traceback
+from datetime import date, datetime, time as datetime_time, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 from digest import build_digest
 from nim import add_nim_summaries, finalize_news_for_publish
@@ -49,8 +51,32 @@ def load_environment():
     )
 
 
-async def run_digest(env, publish=False):
+def parse_publish_date(value, env):
+    if value in (None, ""):
+        return None
+
+    try:
+        target_date = date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("Invalid date override. Use YYYY-MM-DD.") from exc
+
+    timezone_name = getattr(env, "DIGEST_TIMEZONE", None) or "UTC"
+    try:
+        digest_timezone = ZoneInfo(timezone_name)
+    except Exception:
+        digest_timezone = timezone.utc
+
+    local_datetime = datetime.combine(
+        target_date,
+        datetime_time(12, 0),
+        tzinfo=digest_timezone,
+    )
+    return local_datetime.astimezone(timezone.utc)
+
+
+async def run_digest(env, publish=False, publish_date=None):
     timings = {}
+    now_utc = parse_publish_date(publish_date, env)
 
     started_at = time.monotonic()
     published_items = await get_published_items(env)
@@ -60,7 +86,11 @@ async def run_digest(env, publish=False):
     )
 
     started_at = time.monotonic()
-    digest = await build_digest(env, published_items=published_items)
+    digest = await build_digest(
+        env,
+        now_utc=now_utc,
+        published_items=published_items,
+    )
     timings["build_digest_seconds"] = round(time.monotonic() - started_at, 3)
 
     started_at = time.monotonic()
@@ -113,6 +143,10 @@ def parse_args():
         action="store_true",
         help="Publish missing digest rows to Notion. Without this flag, no rows are created.",
     )
+    parser.add_argument(
+        "--date",
+        help="Publish date override in YYYY-MM-DD format. The digest covers the previous calendar day.",
+    )
     return parser.parse_args()
 
 
@@ -120,7 +154,11 @@ def main():
     args = parse_args()
 
     try:
-        result = asyncio.run(run_digest(load_environment(), publish=args.publish))
+        result = asyncio.run(run_digest(
+            load_environment(),
+            publish=args.publish,
+            publish_date=args.date,
+        ))
         print(json.dumps(result, indent=2))
     except Exception as exc:
         print(json.dumps({

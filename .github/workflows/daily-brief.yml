@@ -5,6 +5,11 @@ on:
     - cron: "0 6 * * *"
     - cron: "0 12 * * *"
   workflow_dispatch:
+    inputs:
+      date:
+        description: "Optional publish date to backfill (YYYY-MM-DD)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -36,4 +41,5 @@ jobs:
           NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           DIGEST_TIMEZONE: Europe/Berlin
-        run: python src/cli.py --publish
+          PUBLISH_DATE: ${{ inputs.date || '' }}
+        run: python src/cli.py --publish --date "$PUBLISH_DATE"
