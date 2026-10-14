@@ -203,6 +203,19 @@ python src/cli.py --publish
 
 The `--publish` flag is intentionally required. Without it, the CLI does not create Notion rows.
 
+### Backfill a Publish Date
+
+Use `--date YYYY-MM-DD` to override the publish date:
+
+```bash
+python src/cli.py --date 2026-10-13
+python src/cli.py --publish --date 2026-10-13
+```
+
+The first command previews the backfill; the second publishes missing rows. The date is the Notion digest date. News covers the previous calendar day in `DIGEST_TIMEZONE` (default: `Europe/Berlin`), so this example covers news from October 12. Papers use the seven-day lookback ending at the start of the publish date. Existing Date + Rank and all-history duplicate checks still apply.
+
+To backfill through GitHub Actions, open **Actions → AI Daily Brief → Run workflow** and enter the optional `date` input in `YYYY-MM-DD` format. Leave it blank to use the current publish date. Backfills query the live sources, so older content may no longer be available.
+
 To run the optional Cloudflare HTTP endpoints locally, install the Node dependencies and run `npm run dev`.
 
 ## Testing Locally
