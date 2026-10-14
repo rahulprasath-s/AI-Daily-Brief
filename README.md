@@ -8,10 +8,12 @@ GitHub Actions runs the publishing pipeline twice daily. An optional Cloudflare 
 
 ## What This Project Does
 
-Every day, this project publishes:
+For each digest date, this project publishes up to:
 
-- Top 5 latest AI research papers from arXiv
-- Top 10 AI news/model updates
+- 5 latest eligible AI research papers from arXiv
+- 10 ranked AI news/model updates
+
+These are maximum counts. Source failures, limited eligible content, duplicate checks, and summary validation can reduce the number published. Reconciliation runs fill available ranks without replacing existing rows.
 
 The final output is written into a Notion database with ranks like:
 
