@@ -280,11 +280,13 @@ Publish digest to Notion:
 curl -X POST http://localhost:8787/publish-digest
 ```
 
-Test scheduled publish simulation:
+Run the scheduled publishing flow manually (creates missing rows in the configured Notion database):
 
 ```bash
 curl -X POST http://localhost:8787/debug/scheduled
 ```
+
+Despite the `debug` name and the response's "simulation" wording, `/debug/scheduled` performs real Notion writes. Use `/run-digest` to build a digest without publishing.
 
 Test one NVIDIA NIM summary:
 
@@ -331,6 +333,8 @@ POST /run-digest
 POST /publish-digest
 POST /debug/scheduled
 ```
+
+Both `/publish-digest` and `/debug/scheduled` create missing Notion rows. `/run-digest` builds a digest without creating rows.
 
 ## Deployment
 
