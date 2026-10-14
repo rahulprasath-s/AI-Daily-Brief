@@ -240,6 +240,16 @@ For deployment, authenticate with Cloudflare and configure the same secrets on t
 
 ## Testing Locally
 
+Run the automated regression suite from the repository root:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The suite covers CLI dry runs and date overrides, digest windows, arXiv retry/parsing, Techmeme RSS timestamps, duplicate protection, Notion properties, and source failure handling. API calls are mocked, so the tests do not require secrets or publish to Notion.
+
+For the following HTTP checks, first start the optional Worker with `npm run dev`.
+
 Health check:
 
 ```bash
@@ -423,6 +433,8 @@ src/
     hackernews.py
     huggingface.py
     techmeme.py
+tests/
+  test_pipeline.py
 wrangler.jsonc
 package.json
 pyproject.toml
@@ -551,4 +563,4 @@ Possible next improvements:
 - improve Techmeme parsing
 - store run logs in a database or Notion log table
 - add GitHub Actions failure notifications
-- add tests for source parsers
+- expand source parser coverage for Hacker News and Hugging Face
