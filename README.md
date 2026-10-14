@@ -183,11 +183,20 @@ Notes:
 
 ## Local Development
 
+Run these commands from the repository root. Install Python 3.12 or newer, then create and activate a virtual environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
 Install dependencies:
 
 ```bash
 python -m pip install .
 ```
+
+Export all three variables listed under **Required Secrets**, including for a CLI dry run. Dry runs read Notion history and call the source and NIM APIs, but do not create Notion rows. The CLI does not automatically load `.env` or `.dev.vars` files.
 
 Build a digest locally without publishing:
 
@@ -216,7 +225,18 @@ The first command previews the backfill; the second publishes missing rows. The 
 
 To backfill through GitHub Actions, open **Actions → AI Daily Brief → Run workflow** and enter the optional `date` input in `YYYY-MM-DD` format. Leave it blank to use the current publish date. Backfills query the live sources, so older content may no longer be available.
 
-To run the optional Cloudflare HTTP endpoints locally, install the Node dependencies and run `npm run dev`.
+### Optional Cloudflare Worker Setup
+
+Install Node.js with npm and [uv](https://docs.astral.sh/uv/getting-started/installation/). The npm scripts call `uv run pywrangler`, which uses the `workers-py` development dependency in `pyproject.toml`. See the [Cloudflare Python Workers setup guide](https://developers.cloudflare.com/workers/languages/python/).
+
+Install the Node dependencies, put the three secrets in `.dev.vars`, and start the HTTP endpoints:
+
+```bash
+npm install
+npm run dev
+```
+
+For deployment, authenticate with Cloudflare and configure the same secrets on the deployed Worker; `.dev.vars` supplies local development secrets only.
 
 ## Testing Locally
 
