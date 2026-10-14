@@ -69,7 +69,7 @@ Publish missing rows to Notion
 - Collects papers from arXiv
 - Collects AI stories from Hacker News
 - Collects trending model updates from Hugging Face
-- Scrapes AI-related Techmeme stories
+- Collects AI-related stories from Techmeme's RSS feed
 - Uses NVIDIA NIM for AI ranking and summarization
 - Publishes directly to Notion
 - Prevents duplicate same-day rows and filters repeated items across recent history
@@ -84,9 +84,9 @@ Publish missing rows to Notion
 - Notion API
 - NVIDIA NIM API
 - arXiv API
-- Hacker News Firebase API
+- Hacker News Algolia Search API
 - Hugging Face Hub API
-- Techmeme scraping
+- Techmeme RSS feed
 - Wrangler
 
 ## Notion Database Schema
@@ -359,9 +359,9 @@ stat.ML
 
 ### Hacker News
 
-Uses the public Hacker News Firebase API.
+Uses the Hacker News Algolia Search API (`https://hn.algolia.com/api/v1/search_by_date`).
 
-The Worker queries Hacker News stories for the exact digest window in one paginated search request, then keeps AI-related items based on keywords and ranks them by engagement.
+The pipeline queries Hacker News stories for the exact digest window with paginated search requests, then keeps AI-related items based on keywords and ranks them by engagement.
 
 ### Hugging Face
 
@@ -466,7 +466,7 @@ Fetches trending Hugging Face model updates.
 
 ### `src/sources/techmeme.py`
 
-Scrapes Techmeme and filters AI-related stories.
+Parses Techmeme's RSS feed and filters AI-related stories.
 
 ## Safety Notes
 
