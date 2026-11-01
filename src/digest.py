@@ -6,15 +6,13 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from notion import get_published_items, item_identities
-from sources.arxiv import fetch_arxiv_papers
 from sources.hackernews import fetch_hackernews_ai_stories
 from sources.huggingface import fetch_huggingface_ai_models
 from sources.techmeme import fetch_techmeme_ai_stories
 from nim import rank_news_with_nim
 
 
-DEFAULT_DIGEST_TIMEZONE = "UTC"
-PAPER_LOOKBACK_DAYS = 7
+DEFAULT_DIGEST_TIMEZONE = "Europe/Berlin"
 TITLE_STOPWORDS = {
     "a", "an", "and", "announces", "announcing", "at", "for", "from", "in",
     "into", "its", "new", "of", "on", "the", "to", "with",
@@ -349,23 +347,9 @@ def _filter_items_to_window(items, window_start_utc, window_end_utc):
     }
 
 
-def _paper_lookback_window(news_window):
-    window_end_local = news_window["window_end_local"]
-    window_start_local = window_end_local - timedelta(days=PAPER_LOOKBACK_DAYS)
-
-    return {
-        "days": PAPER_LOOKBACK_DAYS,
-        "window_start_local": window_start_local,
-        "window_end_local": window_end_local,
-        "window_start_utc": window_start_local.astimezone(timezone.utc),
-        "window_end_utc": news_window["window_end_utc"],
-    }
-
-
 async def build_digest(env=None, now_utc=None, published_items=None):
     digest_env = env
     window = _news_window(digest_env, now_utc=now_utc)
-    paper_window = _paper_lookback_window(window)
     if published_items is None:
         published_items = await get_published_items(env) if env else []
     published_identities = set()
@@ -373,9 +357,8 @@ async def build_digest(env=None, now_utc=None, published_items=None):
     for item in published_items:
         published_identities.update(item_identities(item))
 
-    source_names = ("arxiv", "hackernews", "huggingface", "techmeme")
+    source_names = ("hackernews", "huggingface", "techmeme")
     source_results = await asyncio.gather(
-        fetch_arxiv_papers(limit=200),
         fetch_hackernews_ai_stories(
             limit=40,
             scan_count=1000,
@@ -391,25 +374,16 @@ async def build_digest(env=None, now_utc=None, published_items=None):
         for source_name, result in zip(source_names, source_results)
         if isinstance(result, Exception)
     }
-    papers, hn_news, hf_news, techmeme_news = [
+    hn_news, hf_news, techmeme_news = [
         [] if isinstance(result, Exception) else result
         for result in source_results
     ]
 
     deduped_news = _dedupe_by_url([*hn_news, *hf_news, *techmeme_news])
-    windowed_papers_result = _filter_items_to_window(
-        papers,
-        paper_window["window_start_utc"],
-        paper_window["window_end_utc"],
-    )
     windowed_news_result = _filter_items_to_window(
         deduped_news,
         window["window_start_utc"],
         window["window_end_utc"],
-    )
-    unseen_papers_result = _exclude_previously_published(
-        windowed_papers_result["items"],
-        published_identities,
     )
     unseen_news_result = _exclude_previously_published(
         windowed_news_result["items"],
@@ -424,9 +398,7 @@ async def build_digest(env=None, now_utc=None, published_items=None):
         env,
         history_dedupe_result["items"],
     )
-    eligible_papers = unseen_papers_result["items"]
     all_news = pre_rank_dedupe_result["items"]
-    ranked_papers = _rank_items(eligible_papers, "P", 5)
     locally_ranked_news = _rank_items(all_news, "N", 20)
     ranked_news = (
         await rank_news_with_nim(env, locally_ranked_news, limit=10)
@@ -438,18 +410,9 @@ async def build_digest(env=None, now_utc=None, published_items=None):
         "ok": True,
         "date": window["window_end_local"].date().isoformat(),
         "content_date": window["window_start_local"].date().isoformat(),
-        "papers": ranked_papers,
         "news": ranked_news,
         "stats": {
-            "papers_seen": len(papers),
             "source_errors": source_errors,
-            "papers_in_lookback": len(windowed_papers_result["items"]),
-            "papers_considered": len(eligible_papers),
-            "papers_missing_timestamp": windowed_papers_result["skipped_without_timestamp"],
-            "papers_outside_lookback": windowed_papers_result["skipped_outside_window"],
-            "paper_lookback_days": paper_window["days"],
-            "paper_lookback_start": paper_window["window_start_local"].isoformat(),
-            "paper_lookback_end": paper_window["window_end_local"].isoformat(),
             "hackernews_seen": len(hn_news),
             "huggingface_seen": len(hf_news),
             "techmeme_seen": len(techmeme_news),
@@ -469,6 +432,5 @@ async def build_digest(env=None, now_utc=None, published_items=None):
             "news_window_end": window["window_end_local"].isoformat(),
             "published_items_checked": len(published_items),
             "published_identities_checked": len(published_identities),
-            "papers_skipped_history_identity": len(unseen_papers_result["skipped"]),
         },
     }

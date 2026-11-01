@@ -13,7 +13,6 @@ from notion import (
     get_published_items,
     publish_digest_to_notion,
 )
-from sources.arxiv import fetch_arxiv_papers
 from sources.hackernews import fetch_hackernews_ai_stories
 from sources.huggingface import fetch_huggingface_ai_models
 from sources.techmeme import fetch_techmeme_ai_stories
@@ -127,9 +126,7 @@ class Default(WorkerEntrypoint):
         print(json.dumps({
             "event": "daily_digest_published",
             "date": digest.get("date"),
-            "papers": len(digest.get("papers", [])),
             "news": len(digest.get("news", [])),
-            "missing_papers": len(missing_digest.get("papers", [])),
             "missing_news": len(missing_digest.get("news", [])),
             "notion_created": publish_result.get("created"),
             "stats": digest.get("stats", {}),
@@ -167,7 +164,7 @@ class Default(WorkerEntrypoint):
                 "daily_cron_utc": "0 6 * * *",
                 "reconciliation_cron_utc": "0 12 * * *",
                 "publishes_to": "notion",
-                "sources": ["arXiv", "hacker news", "hugging face", "techmeme"],
+                "sources": ["hacker news", "hugging face", "techmeme"],
                 "summarizer": "qwen/qwen3-next-80b-a3b-instruct via NVIDIA NIM",
                 "dedupe_key": "Date + Rank, plus all-history Link, Title, and Summary checks",
                 "news_window": {
@@ -181,14 +178,6 @@ class Default(WorkerEntrypoint):
                     "NOTION_DATABASE_ID": bool(getattr(self.env, "NOTION_DATABASE_ID", None)),
                     "NVIDIA_NIM_API_KEY": bool(getattr(self.env, "NVIDIA_NIM_API_KEY", None)),
                 },
-            })
-
-        if method == "GET" and url.endswith("/debug/arxiv"):
-            papers = await fetch_arxiv_papers(limit=5)
-            return json_response({
-                "ok": True,
-                "count": len(papers),
-                "papers": papers,
             })
 
         if method == "GET" and url.endswith("/debug/hackernews"):
@@ -220,13 +209,12 @@ class Default(WorkerEntrypoint):
                 digest = await build_digest(self.env)
                 sample_digest = {
                     **digest,
-                    "papers": digest.get("papers", [])[:1],
-                    "news": [],
+                    "news": digest.get("news", [])[:1],
                 }
                 summarized = await add_nim_summaries(self.env, sample_digest)
                 return json_response({
                     "ok": True,
-                    "item": summarized["papers"][0] if summarized["papers"] else None,
+                    "item": summarized["news"][0] if summarized["news"] else None,
                 })
             except Exception as exc:
                 return json_response({
@@ -255,9 +243,7 @@ class Default(WorkerEntrypoint):
                     "message": "Scheduled publish simulation succeeded",
                     "date": digest.get("date"),
                     "content_date": digest.get("content_date"),
-                    "papers": len(digest.get("papers", [])),
                     "news": len(digest.get("news", [])),
-                    "missing_papers": len(missing_digest.get("papers", [])),
                     "missing_news": len(missing_digest.get("news", [])),
                     "notion": publish_result,
                     "stats": digest.get("stats", {}),
@@ -293,9 +279,7 @@ class Default(WorkerEntrypoint):
                     "ok": True,
                     "date": digest.get("date"),
                     "content_date": digest.get("content_date"),
-                    "papers": len(digest.get("papers", [])),
                     "news": len(digest.get("news", [])),
-                    "missing_papers": len(missing_digest.get("papers", [])),
                     "missing_news": len(missing_digest.get("news", [])),
                     "notion": publish_result,
                     "stats": digest.get("stats", {}),
@@ -334,9 +318,7 @@ class Default(WorkerEntrypoint):
                     "message": "One-time publish succeeded",
                     "date": digest.get("date"),
                     "content_date": digest.get("content_date"),
-                    "papers": len(digest.get("papers", [])),
                     "news": len(digest.get("news", [])),
-                    "missing_papers": len(missing_digest.get("papers", [])),
                     "missing_news": len(missing_digest.get("news", [])),
                     "notion": publish_result,
                     "stats": digest.get("stats", {}),
@@ -365,9 +347,7 @@ class Default(WorkerEntrypoint):
                     "message": "Digest build succeeded",
                     "date": digest.get("date"),
                     "content_date": digest.get("content_date"),
-                    "papers": len(digest.get("papers", [])),
                     "news": len(digest.get("news", [])),
-                    "missing_papers": len(missing_digest.get("papers", [])),
                     "missing_news": len(missing_digest.get("news", [])),
                     "stats": digest.get("stats", {}),
                     "timings": timings,

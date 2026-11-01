@@ -96,8 +96,6 @@ def _page_description(page):
 def _source_name(item):
     source = item.get("source", "")
     source_map = {
-        "arxiv": "arXiv",
-        "arXiv": "arXiv",
         "hacker news": "hacker news",
         "hugging face": "hugging face",
         "techmeme": "techmeme",
@@ -347,7 +345,7 @@ async def publish_digest_to_notion(env, digest, published_items=None):
     if not notion_token or not database_id:
         raise RuntimeError("Missing NOTION_TOKEN or NOTION_DATABASE_ID")
 
-    items = [*digest.get("papers", []), *digest.get("news", [])]
+    items = digest.get("news", [])
     if published_items is None:
         existing_pages_by_rank = await _query_existing_pages_for_date(
             notion_token,
@@ -461,13 +459,6 @@ async def filter_missing_digest_items(env, digest, published_items=None):
             item_identities(item) for item in existing_pages_by_rank.values()
         )) if existing_pages_by_rank else set()
 
-    missing_papers = [
-        item for item in digest.get("papers", [])
-        if (
-            item.get("rank", "") not in existing_pages_by_rank
-            and not (item_identities(item) & existing_identities)
-        )
-    ]
     missing_news = [
         item for item in digest.get("news", [])
         if not (item_identities(item) & existing_identities)
@@ -478,7 +469,6 @@ async def filter_missing_digest_items(env, digest, published_items=None):
 
     return {
         **digest,
-        "papers": missing_papers,
         "news": missing_news,
         "existing_count": len(existing_pages_by_rank),
         "existing_same_day_identity_count": len(existing_identities),

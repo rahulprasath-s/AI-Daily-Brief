@@ -266,18 +266,12 @@ async def _chat_completion(nim_api_key, payload, timeout_seconds=DEFAULT_NIM_TIM
 
 
 def _prompt_for_item(item):
-    item_type = item.get("type", "news")
     title = item.get("title", "")
     source = item.get("source", "")
     content = _shorten(item.get("summary_input", "") or title)
 
-    if item_type == "paper":
-        instruction = "Summarize this AI research paper."
-    else:
-        instruction = "Summarize this AI news/model item."
-
     return f"""
-{instruction}
+Summarize this AI news/model item.
 
 Return only valid JSON with this exact shape:
 {{"summary":"one concise summary under 100 words"}}
@@ -540,16 +534,10 @@ async def add_nim_summaries(env, digest):
     nim_api_key = getattr(env, "NVIDIA_NIM_API_KEY", None)
     timeout_seconds = _nim_timeout_seconds(env)
 
-    papers = digest.get("papers", [])
     news_items = digest.get("news", [])
-    items = [*papers, *news_items]
+    items = news_items
 
     if not nim_api_key:
-        for item in papers:
-            item["summary"] = _fallback_summary(item)
-            item["summary_source"] = "fallback-no-nim"
-            item["summary_generation_failed"] = False
-
         for item in news_items:
             item["summary"] = _fallback_summary(item)
             item["summary_source"] = "fallback-no-nim"
