@@ -111,6 +111,11 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             "Image generation licensing", "Datacenter energy consumption",
             "European artificial intelligence regulation", "Enterprise agent security",
             "Neural weather forecasting", "Semiconductor export restrictions",
+            "Quantum error correction", "Satellite wildfire detection",
+            "Agricultural crop monitoring", "Underwater acoustic navigation",
+            "Battery materials synthesis", "Education tutoring platform",
+            "Financial fraud prevention", "Accessible sign language translation",
+            "Hospital diagnostic imaging", "Factory predictive maintenance",
         ]
         stories = [{
             "type": "news", "source": "hacker news", "title": title,
@@ -133,6 +138,21 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         for source in (hn, hf, tm):
             source.assert_awaited_once()
         self.assertEqual(str(hn.call_args.kwargs["window_start_utc"]), "2026-07-12 22:00:00+00:00")
+
+        with (
+            patch.object(digest, "fetch_hackernews_ai_stories", new=AsyncMock(return_value=stories)),
+            patch.object(digest, "fetch_huggingface_ai_models", new=AsyncMock(return_value=[])),
+            patch.object(digest, "fetch_techmeme_ai_stories", new=AsyncMock(return_value=[])),
+            patch.object(digest, "rank_news_with_nim", new=AsyncMock(return_value=stories[:10])) as rank,
+        ):
+            result = await digest.build_digest(
+                Env(), now_utc=datetime(2026, 7, 14, 6, tzinfo=timezone.utc),
+                published_items=[],
+            )
+        self.assertEqual(len(result["news"]), 10)
+        self.assertEqual(len(rank.call_args.args[1]), len(titles))
+        self.assertIn(stories[0], rank.call_args.args[1])
+        self.assertEqual(rank.call_args.kwargs["limit"], 10)
 
     async def test_news_candidates_are_ranked_with_nim_after_history_filtering(self):
         seen = {"type": "news", "title": "Existing release", "url": "https://example.com/seen"}

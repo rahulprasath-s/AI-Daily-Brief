@@ -399,7 +399,9 @@ async def build_digest(env=None, now_utc=None, published_items=None):
         history_dedupe_result["items"],
     )
     all_news = pre_rank_dedupe_result["items"]
-    locally_ranked_news = _rank_items(all_news, "N", 20)
+    # Let NIM compare every eligible story: engagement scores from different
+    # sources are not comparable and must not exclude relevant candidates.
+    locally_ranked_news = _rank_items(all_news, "N", len(all_news))
     ranked_news = (
         await rank_news_with_nim(env, locally_ranked_news, limit=10)
         if env
