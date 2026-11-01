@@ -2,8 +2,8 @@ name: AI Daily Brief
 
 on:
   schedule:
-    - cron: "0 6 * * *"
-    - cron: "0 12 * * *"
+    - cron: "0 8 * * *"
+      timezone: "Europe/Berlin"
   workflow_dispatch:
     inputs:
       date:

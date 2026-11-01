@@ -161,8 +161,11 @@ class Default(WorkerEntrypoint):
             return json_response({
                 "ok": True,
                 "service": "ai-daily-brief-worker",
-                "daily_cron_utc": "0 6 * * *",
-                "reconciliation_cron_utc": "0 12 * * *",
+                "schedule": {
+                    "owner": "github_actions",
+                    "cron": "0 8 * * *",
+                    "timezone": "Europe/Berlin",
+                },
                 "publishes_to": "notion",
                 "sources": ["hacker news", "hugging face", "techmeme"],
                 "summarizer": "qwen/qwen3-next-80b-a3b-instruct via NVIDIA NIM",

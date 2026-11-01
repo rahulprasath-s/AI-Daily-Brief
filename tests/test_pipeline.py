@@ -103,6 +103,17 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(window["window_start_local"].isoformat(), "2026-07-13T00:00:00+02:00")
         self.assertEqual(window["window_end_local"].isoformat(), "2026-07-14T00:00:00+02:00")
 
+    def test_previous_calendar_day_spans_dst_changes(self):
+        for month, day, expected_hours in ((3, 30, 23), (10, 26, 25), (11, 1, 24)):
+            with self.subTest(month=month, day=day):
+                window = _news_window(
+                    Env(), now_utc=datetime(2026, month, day, 7, tzinfo=timezone.utc),
+                )
+                duration = window["window_end_utc"] - window["window_start_utc"]
+                self.assertEqual(duration.total_seconds() / 3600, expected_hours)
+                self.assertEqual(window["window_start_local"].hour, 0)
+                self.assertEqual(window["window_end_local"].hour, 0)
+
     async def test_digest_collects_only_news_and_caps_output_at_ten(self):
         titles = [
             "OpenAI reasoning release", "Nvidia inference accelerator",
