@@ -1,30 +1,25 @@
 # AI Daily Brief
 
-AI Daily Brief is a fully automated daily AI news and research brief.
+AI Daily Brief is a fully automated daily AI news brief.
 
-It collects AI-related research papers and news from multiple sources, ranks the most important items, summarizes them using NVIDIA NIM, and publishes the final brief to a Notion database.
+It collects AI news and model updates from multiple sources, ranks the most relevant items, summarizes them using NVIDIA NIM, and publishes the final brief to a Notion database.
 
-GitHub Actions runs the publishing pipeline twice daily. An optional Cloudflare Worker deployment provides health, status, and source-debug endpoints, but does not own the production schedule.
+GitHub Actions schedules the publishing pipeline once daily at **08:00 Europe/Berlin**, with automatic daylight-saving adjustment. An optional Cloudflare Worker deployment provides health, status, and source-debug endpoints, but does not own the production schedule.
 
 ## What This Project Does
 
-For each digest date, this project publishes up to:
+For each digest date, this project publishes up to **10 ranked AI news/model updates**.
 
-- 5 latest eligible AI research papers from arXiv
-- 10 ranked AI news/model updates
-
-These are maximum counts. Source failures, limited eligible content, duplicate checks, and summary validation can reduce the number published. Reconciliation runs fill available ranks without replacing existing rows.
+These are maximum counts. Source failures, limited eligible content, duplicate checks, and summary validation can reduce the number published. Manual retries fill available ranks without replacing existing rows.
 
 The final output is written into a Notion database with ranks like:
 
-- `P1`, `P2`, `P3`, `P4`, `P5` for papers
 - `N1`, `N2`, ..., `N10` for news
 
 ## Data Sources
 
-The Worker collects data from:
+The pipeline collects news from:
 
-- arXiv
 - Hacker News
 - Hugging Face
 - Techmeme
@@ -42,7 +37,7 @@ GitHub Actions Schedule
 Python CLI
         |
         v
-Collect from arXiv, Hacker News, Hugging Face, Techmeme
+Collect from Hacker News, Hugging Face, Techmeme
         |
         v
 Filter AI-related content
@@ -51,7 +46,7 @@ Filter AI-related content
 Deduplicate repeated links
         |
         v
-Rank papers and news
+Rank eligible news by relevance
         |
         v
 Use NVIDIA NIM for news ranking and summaries
@@ -68,7 +63,6 @@ Publish missing rows to Notion
 - Runs automatically every day in the cloud
 - Works even when the laptop is off
 - Uses GitHub Actions for free scheduled execution
-- Collects papers from arXiv
 - Collects AI stories from Hacker News
 - Collects trending model updates from Hugging Face
 - Collects AI-related stories from Techmeme's RSS feed
@@ -85,7 +79,6 @@ Publish missing rows to Notion
 - Cloudflare Workers for optional HTTP/debug endpoints
 - Notion API
 - NVIDIA NIM API
-- arXiv API
 - Hacker News Algolia Search API
 - Hugging Face Hub API
 - Techmeme RSS feed
@@ -98,18 +91,17 @@ The Notion database should contain these properties:
 | Property | Type | Purpose |
 |---|---|---|
 | Date | Date | Digest date |
-| Type | Select | `paper` or `news` |
+| Type | Select | `news` |
 | Title | Title | Item title |
 | Description | Text / Rich text | Summary |
 | Source | Select | Source name |
 | Link | URL | Original source link |
 | Status | Status | Defaults to `NOT YET` for every published item |
-| Rank | Text | `P1-P5` or `N1-N10` |
+| Rank | Text | `N1-N10` |
 
 Recommended `Source` select options:
 
 ```text
-arXiv
 hacker news
 hugging face
 techmeme
@@ -118,22 +110,22 @@ techmeme
 Recommended `Type` select options:
 
 ```text
-paper
 news
 ```
 
 ## GitHub Actions Schedule
 
-The workflow in `.github/workflows/daily-brief.yml` has two daily schedules.
+The workflow in `.github/workflows/daily-brief.yml` runs once daily at **08:00 Europe/Berlin**:
 
-Current schedule:
-
-```text
-0 6 * * *
-0 12 * * *
+```yaml
+schedule:
+  - cron: "0 8 * * *"
+    timezone: "Europe/Berlin"
 ```
 
-The primary digest runs at `06:00 UTC`. The `12:00 UTC` reconciliation run uses the same Date + Rank and all-history identity guards, so it adds only items that were missing from the primary run. The workflow can also be started manually from the repository's **Actions** tab. arXiv requests retry transient failures before a run is treated as unavailable.
+This is 07:00 UTC during CET and 06:00 UTC during CEST. The IANA timezone automatically handles daylight saving; there is no second scheduled reconciliation run. Manual runs remain available through the repository's **Actions** tab and use the same Date + Rank and all-history duplicate guards.
+
+08:00 is the scheduled start time. Collection, ranking, summarization, and publishing take additional time, and GitHub Actions can delay scheduled jobs during busy periods. See [GitHub's schedule documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
 
 ## Required Secrets
 
@@ -175,7 +167,7 @@ DIGEST_TIMEZONE=Europe/Berlin
 
 With this configuration, the digest includes only news whose source timestamp falls between `00:00` (inclusive) and the next `00:00` (exclusive) for the previous calendar day in `Europe/Berlin`.
 
-Research papers use a seven-day lookback because arXiv announces submissions Sunday through Thursday and can publish a weekend batch after the papers' original submission dates. The Worker selects the newest unseen papers from that lookback and checks their normalized links and titles against all existing Notion history before publishing them. arXiv papers use their original `published` timestamp, not a later update timestamp.
+Research-paper collection and publishing have been removed. Existing paper rows in Notion remain intact; new rows use only `news` and ranks `N1`–`N10`. No Notion database migration is required.
 
 Notes:
 
@@ -223,7 +215,7 @@ python src/cli.py --date 2026-10-13
 python src/cli.py --publish --date 2026-10-13
 ```
 
-The first command previews the backfill; the second publishes missing rows. The date is the Notion digest date. News covers the previous calendar day in `DIGEST_TIMEZONE` (default: `Europe/Berlin`), so this example covers news from October 12. Papers use the seven-day lookback ending at the start of the publish date. Existing Date + Rank and all-history duplicate checks still apply.
+The first command previews the backfill; the second publishes missing rows. The date is the Notion digest date. News covers the previous calendar day in `DIGEST_TIMEZONE` (default: `Europe/Berlin`), so this example covers news from October 12. Existing Date + Rank and all-history duplicate checks still apply.
 
 To backfill through GitHub Actions, open **Actions → AI Daily Brief → Run workflow** and enter the optional `date` input in `YYYY-MM-DD` format. Leave it blank to use the current publish date. Backfills query the live sources, so older content may no longer be available.
 
@@ -248,7 +240,7 @@ Run the automated regression suite from the repository root:
 python -m unittest discover -s tests -v
 ```
 
-The suite covers CLI dry runs and date overrides, digest windows, arXiv retry/parsing, Techmeme RSS timestamps, duplicate protection, Notion properties, and source failure handling. API calls are mocked, so the tests do not require secrets or publish to Notion.
+The suite covers news-only collection and publishing, relevance ranking across all candidates, CLI dry runs and date overrides, Berlin scheduling and DST windows, Worker routes, Techmeme RSS timestamps, duplicate protection, Notion properties, and source failure handling. API calls are mocked, so the tests do not require secrets or publish to Notion.
 
 For the following HTTP checks, first start the optional Worker with `npm run dev`.
 
@@ -301,7 +293,6 @@ curl -X POST http://localhost:8787/debug/nim
 The Worker includes source-specific debug endpoints.
 
 ```text
-GET /debug/arxiv
 GET /debug/hackernews
 GET /debug/huggingface
 GET /debug/techmeme
@@ -310,7 +301,7 @@ GET /debug/techmeme
 Example:
 
 ```bash
-curl http://localhost:8787/debug/arxiv
+curl http://localhost:8787/debug/hackernews
 ```
 
 These endpoints help verify each source independently.
@@ -389,22 +380,11 @@ Base URL:
 https://integrate.api.nvidia.com/v1
 ```
 
+All eligible, unseen news candidates are sent to NIM for relevance ranking rather than being cut down to a cross-source engagement shortlist. NIM prioritizes significant releases, credible sources, meaningful impact, originality, and broad relevance. If ranking fails, the pipeline falls back to local scores.
+
 NIM summaries are kept concise so the Notion `Description` field stays readable.
 
 ## Source Behavior
-
-### arXiv
-
-Uses the arXiv API to fetch recent papers from AI/ML/NLP-related categories.
-
-Example categories:
-
-```text
-cs.AI
-cs.CL
-cs.LG
-stat.ML
-```
 
 ### Hacker News
 
@@ -435,12 +415,12 @@ src/
   notion.py
   sources/
     __init__.py
-    arxiv.py
     hackernews.py
     huggingface.py
     techmeme.py
 tests/
   test_pipeline.py
+  test_entry.py
 wrangler.jsonc
 package.json
 pyproject.toml
@@ -475,7 +455,6 @@ Handles:
 
 - fetching all sources
 - deduplication
-- initial paper ranking
 - news ranking with NVIDIA NIM
 
 ### `src/filtering.py`
@@ -502,10 +481,6 @@ Used for:
 - creating Notion rows
 - checking existing rows
 - preventing duplicates
-
-### `src/sources/arxiv.py`
-
-Fetches recent AI-related papers from arXiv.
 
 ### `src/sources/hackernews.py`
 
@@ -563,7 +538,6 @@ This project currently supports:
 Possible next improvements:
 
 - add failure alerts through email, Telegram, or Discord
-- improve paper ranking with NVIDIA NIM
 - update existing Notion rows instead of only skipping them
 - create one daily summary page in Notion
 - improve Techmeme parsing
