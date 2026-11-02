@@ -162,8 +162,11 @@ class Default(WorkerEntrypoint):
                 "ok": True,
                 "service": "ai-daily-brief-worker",
                 "schedule": {
-                    "owner": "github_actions",
-                    "cron": "0 8 * * *",
+                    "owner": "cloudflare_cron",
+                    "prepare_at": "07:55",
+                    "retry_at": "07:58",
+                    "publish_at": "08:00",
+                    "github_recovery_cron": "5 8 * * *",
                     "timezone": "Europe/Berlin",
                 },
                 "publishes_to": "notion",

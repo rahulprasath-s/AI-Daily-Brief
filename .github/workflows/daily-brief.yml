@@ -1,13 +1,19 @@
 name: AI Daily Brief
+run-name: Morning news · ${{ inputs.date || 'manual-or-recovery' }}
 
 on:
   schedule:
-    - cron: "0 8 * * *"
+    # Recovery only. Cloudflare dispatches the primary run at 07:55 Berlin.
+    - cron: "5 8 * * *"
       timezone: "Europe/Berlin"
   workflow_dispatch:
     inputs:
       date:
         description: "Optional publish date to backfill (YYYY-MM-DD)"
+        required: false
+        type: string
+      release_at:
+        description: "Optional earliest publish time (ISO timestamp with timezone)"
         required: false
         type: string
 
@@ -42,4 +48,5 @@ jobs:
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           DIGEST_TIMEZONE: Europe/Berlin
           PUBLISH_DATE: ${{ inputs.date || '' }}
-        run: python src/cli.py --publish --date "$PUBLISH_DATE"
+          RELEASE_AT: ${{ inputs.release_at || '' }}
+        run: python src/cli.py --publish --date "$PUBLISH_DATE" --release-at "$RELEASE_AT"

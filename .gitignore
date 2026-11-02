@@ -70,3 +70,6 @@ python_modules/
 __pycache__/
 *.pyc
 *.egg-info/
+
+# Generated Cloudflare scheduler types
+scheduler/worker-configuration.d.ts

@@ -33,19 +33,19 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.worker = entry.Default()
         self.worker.env = types.SimpleNamespace(DIGEST_TIMEZONE="Europe/Berlin")
 
-    async def test_status_matches_single_berlin_workflow_schedule(self):
+    async def test_status_matches_external_scheduler_and_recovery_workflow(self):
         response = await self.worker.fetch(types.SimpleNamespace(
             method="GET", url="https://example.com/status",
         ))
         schedule = response.body["schedule"]
         workflow = (ROOT / ".github/workflows/daily-brief.yml").read_text()
-        self.assertEqual(re.findall(r'- cron: "([^"]+)"', workflow), [schedule["cron"]])
+        self.assertEqual(re.findall(r'- cron: "([^"]+)"', workflow), [schedule["github_recovery_cron"]])
         self.assertEqual(re.findall(r'timezone: "([^"]+)"', workflow), [schedule["timezone"]])
-        self.assertEqual(schedule["owner"], "github_actions")
+        self.assertEqual(schedule["owner"], "cloudflare_cron")
         self.assertNotIn("arXiv", response.body["sources"])
         self.assertNotIn("reconciliation_cron_utc", response.body)
 
-        minute, hour, *_ = schedule["cron"].split()
+        hour, minute = schedule["publish_at"].split(":")
         berlin = ZoneInfo(schedule["timezone"])
         # The local trigger stays at 08:00 before and after both DST changes.
         for month, day, utc_hour in ((1, 15, 7), (3, 28, 7), (3, 29, 6),

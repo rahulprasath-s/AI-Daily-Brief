@@ -1,0 +1,14 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "ai-daily-brief-scheduler",
+  "main": "index.mjs",
+  "compatibility_date": "2026-11-02",
+  "observability": { "enabled": true },
+  "vars": {
+    "GITHUB_REPOSITORY": "rahulprasath-s/AI-Daily-Brief",
+    "GITHUB_WORKFLOW": "daily-brief.yml"
+  },
+  "triggers": {
+    "crons": ["55,58 5,6 * * *"]
+  }
+}
