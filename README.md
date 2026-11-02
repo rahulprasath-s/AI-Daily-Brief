@@ -4,7 +4,7 @@ AI Daily Brief is a fully automated daily AI news brief.
 
 It collects AI news and model updates from multiple sources, ranks the most relevant items, summarizes them using NVIDIA NIM, and publishes the final brief to a Notion database.
 
-GitHub Actions schedules the publishing pipeline once daily at **08:00 Europe/Berlin**, with automatic daylight-saving adjustment. An optional Cloudflare Worker deployment provides health, status, and source-debug endpoints, but does not own the production schedule.
+A lightweight Cloudflare scheduler starts the GitHub Actions pipeline at **07:55 Europe/Berlin**. The pipeline prepares the news and holds Notion publishing until **08:00**, with automatic daylight-saving adjustment. The separate Python Worker provides optional health, status, and source-debug endpoints.
 
 ## What This Project Does
 
@@ -31,7 +31,10 @@ Each source is normalized into a common item format before ranking and publishin
 The full pipeline looks like this:
 
 ```text
-GitHub Actions Schedule
+Cloudflare Cron (07:55 Europe/Berlin)
+        |
+        v
+GitHub Actions Dispatch
         |
         v
 Python CLI
@@ -113,19 +116,31 @@ Recommended `Type` select options:
 news
 ```
 
-## GitHub Actions Schedule
+## Morning Schedule
 
-The workflow in `.github/workflows/daily-brief.yml` runs once daily at **08:00 Europe/Berlin**:
+GitHub's cron scheduler proved unsuitable for punctual delivery: on November 2, 2026, the 08:00 Berlin run was not created until 17:38. The pipeline itself finished publishing within seconds. The primary clock is now the independent Worker in `scheduler/`:
 
-```yaml
-schedule:
-  - cron: "0 8 * * *"
-    timezone: "Europe/Berlin"
+1. **07:55 Berlin:** Cloudflare calls GitHub's workflow-dispatch API with the digest date and an 08:00 release timestamp. GitHub prepares the digest immediately.
+2. **07:58 Berlin:** Cloudflare checks whether that day's dispatch is queued, running, or successful. It dispatches a retry only when no such run exists.
+3. **08:00 Berlin:** The prepared pipeline starts writing missing news rows to Notion.
+4. **08:05 Berlin:** GitHub's own cron remains a best-effort recovery path. If GitHub delays it, existing Date + Rank and history checks prevent duplicate publishing.
+
+Cloudflare cron uses UTC, so `55,58 5,6 * * *` checks both possible UTC hours. The Worker converts the scheduled timestamp to `Europe/Berlin` and ignores the inactive hour, handling CET/CEST automatically. The existing Python Worker's cron remains disabled; the lightweight JavaScript scheduler only dispatches GitHub work and does not run the CPU-heavy digest pipeline.
+
+The release timestamp is passed as `--release-at`. Sources, ranking, and summaries are prepared first, then an async wait holds only Notion writes until the requested time. Past release timestamps run immediately, and waits over 15 minutes are rejected. Manual runs without a release timestamp publish immediately.
+
+This removes reliance on delayed GitHub cron for the primary run and gives GitHub five minutes of preparation time. GitHub runner outages and external APIs can still cause late delivery; this is not a hard real-time delivery guarantee. The existing manual date override and duplicate guards remain available. See [GitHub's scheduling limitations](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+
+### Deploy the Scheduler
+
+The scheduler requires a GitHub credential stored as Cloudflare secret `GITHUB_WORKFLOW_TOKEN`. A fine-grained token restricted to this repository with **Actions: read and write** is sufficient. The scheduler never needs the Notion or NVIDIA secrets, which stay in GitHub Actions. Token expiration or revocation requires replacing the Cloudflare secret.
+
+```bash
+npx wrangler deploy --config scheduler/wrangler.jsonc
+npx wrangler secret put GITHUB_WORKFLOW_TOKEN --config scheduler/wrangler.jsonc
 ```
 
-This is 07:00 UTC during CET and 06:00 UTC during CEST. The IANA timezone automatically handles daylight saving; there is no second scheduled reconciliation run. Manual runs remain available through the repository's **Actions** tab and use the same Date + Rank and all-history duplicate guards.
-
-08:00 is the scheduled start time. Collection, ranking, summarization, and publishing take additional time, and GitHub Actions can delay scheduled jobs during busy periods. See [GitHub's schedule documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+Enter the credential at the secure prompt; never put it in source or command arguments. Check `/health` on the scheduler's deployed URL to verify the secret is configured. Only the health route is public; HTTP requests cannot trigger publishing. Cloudflare cron changes can take up to 15 minutes to propagate.
 
 ## Required Secrets
 
@@ -238,6 +253,7 @@ Run the automated regression suite from the repository root:
 
 ```bash
 python -m unittest discover -s tests -v
+node --test scheduler/index.test.mjs
 ```
 
 The suite covers news-only collection and publishing, relevance ranking across all candidates, CLI dry runs and date overrides, Berlin scheduling and DST windows, Worker routes, Techmeme RSS timestamps, duplicate protection, Notion properties, and source failure handling. API calls are mocked, so the tests do not require secrets or publish to Notion.
@@ -339,7 +355,7 @@ The Cloudflare Worker can still be deployed for its HTTP/debug endpoints:
 npm run deploy
 ```
 
-Its cron list is intentionally empty to prevent duplicate publishing and free-tier CPU failures.
+The Python Worker's cron list is intentionally empty to prevent free-tier CPU failures. The separate `scheduler/wrangler.jsonc` owns the lightweight morning dispatch triggers.
 
 ## Duplicate Protection
 
@@ -405,6 +421,10 @@ Uses Techmeme's RSS feed so every candidate has its own publication timestamp fo
 ## Project Structure
 
 ```text
+scheduler/
+  index.mjs
+  index.test.mjs
+  wrangler.jsonc
 src/
   cli.py
   entry.py
@@ -523,7 +543,7 @@ This command should print nothing.
 
 This project currently supports:
 
-- GitHub Actions scheduled execution
+- Cloudflare-timed GitHub Actions execution with an 08:00 Berlin release gate
 - source collection
 - AI filtering
 - deduplication
