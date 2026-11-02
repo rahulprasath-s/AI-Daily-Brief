@@ -38,6 +38,21 @@ class Env:
 
 
 class PipelineTests(unittest.IsolatedAsyncioTestCase):
+    async def test_release_waits_only_until_target_and_rejects_long_wait(self):
+        now = datetime(2026, 11, 3, 6, 55, tzinfo=timezone.utc)
+        with patch.object(cli.asyncio, "sleep", new=AsyncMock()) as sleep:
+            await cli.wait_until_release(cli.parse_release_at("2026-11-03T08:00:00+01:00"), now)
+            sleep.assert_awaited_once_with(300)
+            sleep.reset_mock()
+            await cli.wait_until_release(cli.parse_release_at("2026-11-03T06:54:00Z"), now)
+            sleep.assert_not_awaited()
+            with self.assertRaisesRegex(ValueError, "15 minutes"):
+                await cli.wait_until_release(cli.parse_release_at("2026-11-03T09:00:00+01:00"), now)
+
+    def test_release_timestamp_requires_timezone(self):
+        with self.assertRaisesRegex(ValueError, "timezone"):
+            cli.parse_release_at("2026-11-03T08:00:00")
+
     def test_cli_publish_date_uses_digest_timezone(self):
         self.assertEqual(
             cli.parse_publish_date("2026-08-04", Env()),

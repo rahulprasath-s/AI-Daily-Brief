@@ -74,9 +74,35 @@ def parse_publish_date(value, env):
     return local_datetime.astimezone(timezone.utc)
 
 
-async def run_digest(env, publish=False, publish_date=None):
+def parse_release_at(value):
+    if not value:
+        return None
+    try:
+        release_at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if release_at.tzinfo is None:
+            raise ValueError("Missing timezone")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid release time. Use an ISO timestamp with timezone.") from exc
+    return release_at.astimezone(timezone.utc)
+
+
+async def wait_until_release(release_at, now_utc=None):
+    if release_at is None:
+        return
+    now_utc = now_utc or datetime.now(timezone.utc)
+    seconds = (release_at - now_utc).total_seconds()
+    if seconds > 15 * 60:
+        raise ValueError("Release time must be within the next 15 minutes.")
+    if seconds > 0:
+        await asyncio.sleep(seconds)
+
+
+async def run_digest(env, publish=False, publish_date=None, release_at=None):
     timings = {}
     now_utc = parse_publish_date(publish_date, env)
+    release_time = parse_release_at(release_at)
+    if release_time and (release_time - datetime.now(timezone.utc)).total_seconds() > 15 * 60:
+        raise ValueError("Release time must be within the next 15 minutes.")
 
     started_at = time.monotonic()
     published_items = await get_published_items(env)
@@ -108,6 +134,8 @@ async def run_digest(env, publish=False, publish_date=None):
 
     publish_result = None
     if publish:
+        # Prepare before 08:00, then hold only the Notion writes until release.
+        await wait_until_release(release_time)
         started_at = time.monotonic()
         publish_result = await publish_digest_to_notion(
             env,
@@ -126,6 +154,7 @@ async def run_digest(env, publish=False, publish_date=None):
         "content_date": digest.get("content_date"),
         "news": len(digest.get("news", [])),
         "missing_news": len(missing_digest.get("news", [])),
+        "release_at": release_time.isoformat() if release_time else None,
         "notion": publish_result,
         "stats": digest.get("stats", {}),
         "timings": timings,
@@ -145,6 +174,10 @@ def parse_args():
         "--date",
         help="Publish date override in YYYY-MM-DD format. The digest covers the previous calendar day.",
     )
+    parser.add_argument(
+        "--release-at",
+        help="Prepare now, but publish no earlier than this timezone-aware ISO timestamp.",
+    )
     return parser.parse_args()
 
 
@@ -156,6 +189,7 @@ def main():
             load_environment(),
             publish=args.publish,
             publish_date=args.date,
+            release_at=args.release_at,
         ))
         print(json.dumps(result, indent=2))
     except Exception as exc:
