@@ -402,6 +402,48 @@ NIM summaries are kept concise so the Notion `Description` field stays readable.
 
 ## Source Behavior
 
+### Optional Source-Backed Summary Stage
+
+The new CPython-only enrichment command updates **existing** news records. It does not create pages, replace `Description`, change the existing `Status`, or change ranking and morning delivery. It is currently a manual test command; it is not wired into the live scheduled workflow.
+
+Install the optional dependencies in the project virtual environment:
+
+```bash
+uv pip install --python .venv/bin/python -e '.[summaries]'
+```
+
+The command reuses `NOTION_TOKEN`, `NOTION_DATABASE_ID`, and `NVIDIA_NIM_API_KEY` from the environment or local `.dev.vars`. Keep those values out of source control. It uses NIM, not Claude. An optional `NVIDIA_NIM_ARTICLE_MODEL` (or `--model`) selects the article-summary model independently of the legacy ranking model. The default `nvidia/nemotron-3.5-lightning-30b-a3b` was verified with an authenticated generation request; reasoning is disabled for concise prose.
+
+Preview extraction without any model calls or Notion writes:
+
+```bash
+.venv/bin/python scripts/summarize_news.py --date 2026-11-14
+```
+
+Generate source-backed summaries and update only `Summary`, `Summary Status`, and `Summarized At`:
+
+```bash
+.venv/bin/python scripts/summarize_news.py --date 2026-11-14 --publish
+```
+
+Requests run serially with a default minimum interval of six seconds. HTTP 429, transient server errors, and transport timeouts have bounded retries; `Retry-After` is respected, including HTTP dates. Requests have timeouts, each story has a 15-minute budget, and the batch has a 30-minute budget. Permanent credential/model errors such as 401, 403, and 410 are not retried repeatedly. Failed work is resumable rather than using an infinite retry loop or a headline fallback.
+
+HTML articles use Trafilatura. Hugging Face reads the actual model-card README; status incidents use incident updates where available; YouTube reads transcripts. Blocked/paywalled pages, missing transcripts, insufficient text, and unsupported content become `Unavailable`. Processing/API failures become `Failed`. Only validated summaries become `Ready`, with a success timestamp. Narrator should consume only `Ready` summaries; non-Ready Summary text contains an availability/failure explanation, not an article summary.
+
+The model treats source text as untrusted data. Summaries use plain spoken English, normally 150–200 words for substantial sources and fewer words for short sources. Known long-context Nemotron 3.5 models receive the complete source when it fits a conservative 120KB UTF-8 input budget. Otherwise all source segments are processed and merged, with intermediate drafts checkpointed; sources beyond the supported full-content budget are explicitly unavailable rather than silently truncated. Token-limited output is rejected and retried with a larger bounded output budget. Generated prose is checked for length, URLs, and Markdown before saving, and model-card/publisher claims have explicit source attribution. A modestly overlong complete prose draft can be shortened by selecting whole passages while retaining its opening attribution and explicit caveats. This edits NIM's summary, not the source article, adds no claims, and is recorded in the cache metadata.
+
+For a story that needs the larger current model, use `--model nvidia/nemotron-3.5-super-vl-120b-a12b`. Changing models does not regenerate unchanged stories already Ready; model-specific new results have separate cache keys.
+
+The ignored `.summary-cache/` directory contains source snapshots, intermediate/final generated results, and pending-write checkpoints in SQLite. Successful model results are committed there **before** a Notion update, so rerunning the same command can retry a failed write without regenerating the summary. Ready summaries with unchanged known source content are skipped. Read-back checks account for Notion's observed minute-level Date precision. `--reuse-sources` explicitly reuses a cached extraction snapshot from a preflight run; omit it to re-fetch sources. Cache storage is local to this machine: durable shared storage must be configured before using this stage on ephemeral GitHub runners. The final JSON report includes status counts and model request counts; a publish run exits nonzero after finishing all stories if any remain Failed, Pending, or awaiting write verification.
+
+On November 14, the legacy `qwen/qwen3-next-80b-a3b-instruct` endpoint returned HTTP 410 and was absent from NVIDIA's model catalog. The new summary stage therefore has a separate instruction-model default; the existing ranking configuration remains untouched. A model appearing in `/v1/models` does not establish that a particular credential is authorized to generate with it.
+
+Run mocked enrichment tests with the existing test suite:
+
+```bash
+.venv/bin/python -B -m unittest discover -s tests -v
+```
+
 ### Hacker News
 
 Uses the Hacker News Algolia Search API (`https://hn.algolia.com/api/v1/search_by_date`).

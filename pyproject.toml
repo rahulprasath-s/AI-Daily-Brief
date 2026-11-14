@@ -9,5 +9,12 @@ dependencies = [
     "tzdata>=2026.2",
 ]
 
+[project.optional-dependencies]
+summaries = [
+    "trafilatura>=2.0,<3",
+    "httpx>=0.28,<1",
+    "youtube-transcript-api>=1.2,<2",
+]
+
 [dependency-groups]
 dev = ["workers-py", "workers-runtime-sdk"]
