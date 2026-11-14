@@ -1,6 +1,8 @@
 import json
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+import asyncio
 
+from uuid import UUID
 from http_client import fetch, response_json
 
 try:
@@ -171,6 +173,62 @@ async def _create_page(notion_token, payload):
         raise RuntimeError(f"Notion page create failed: {data}")
 
     return data
+
+class NotionSummaryUpdateError(RuntimeError):
+    def __init__(self, status, retry_after=None):
+        super().__init__(f"Notion summary update failed: HTTP {status}")
+        self.status = status
+        self.retry_after = retry_after
+
+
+async def update_story_summary(
+    env,
+    page_id,
+    properties,
+    timeout_seconds=20,
+):
+    """Update only summary fields on an existing Notion page."""
+    expected = {"Summary", "Summary Status", "Summarized At"}
+
+    if set(properties) != expected:
+        raise ValueError("Only the three summary properties may be updated.")
+
+    token = getattr(env, "NOTION_TOKEN", None)
+    if not token:
+        raise ValueError("Missing NOTION_TOKEN")
+
+    if timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be positive.")
+
+    # Validate and normalize the page ID before building the URL.
+    normalized_id = str(UUID(str(page_id)))
+
+    async def send_update():
+        response = await fetch(
+            f"{NOTION_PAGES_URL}/{normalized_id}",
+            method="PATCH",
+            headers={
+                "authorization": f"Bearer {token}",
+                "content-type": "application/json",
+                "notion-version": NOTION_VERSION,
+            },
+            body=json.dumps({"properties": properties}),
+            timeout=timeout_seconds,
+        )
+
+        if not response.ok:
+            headers = getattr(response, "headers", {})
+            raise NotionSummaryUpdateError(response.status, headers.get("retry-after"))
+
+        return await response_json(response)
+
+    try:
+        return await asyncio.wait_for(
+            send_update(),
+            timeout=timeout_seconds,
+        )
+    except TimeoutError as exc:
+        raise RuntimeError("Notion summary update timed out") from exc
 
 
 def _rank_from_page(page):
