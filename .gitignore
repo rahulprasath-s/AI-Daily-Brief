@@ -73,6 +73,7 @@ __pycache__/
 
 # Generated Cloudflare scheduler types
 scheduler/worker-configuration.d.ts
+cache/worker-configuration.d.ts
 
 # Local source text and durable generated-summary cache
 .summary-cache/

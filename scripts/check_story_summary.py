@@ -48,6 +48,8 @@ def load_config():
         NOTION_TOKEN=config["NOTION_TOKEN"],
         NVIDIA_NIM_API_KEY=config.get("NVIDIA_NIM_API_KEY"),
         NVIDIA_NIM_ARTICLE_MODEL=config.get("NVIDIA_NIM_ARTICLE_MODEL"),
+        SUMMARY_CACHE_URL=config.get("SUMMARY_CACHE_URL"),
+        SUMMARY_CACHE_TOKEN=config.get("SUMMARY_CACHE_TOKEN"),
     )
 
 
