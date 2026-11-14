@@ -4,6 +4,7 @@ import asyncio
 
 from uuid import UUID
 from http_client import fetch, response_json
+from story_summary import pending_summary_properties
 
 try:
     from nim import is_publishable_news_item, summary_similarity
@@ -109,6 +110,7 @@ def _notion_properties(database_id, digest_date, item):
     return {
         "parent": {"database_id": database_id},
         "properties": {
+            **pending_summary_properties(),
             "Date": {
                 "date": {"start": digest_date},
             },

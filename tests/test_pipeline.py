@@ -273,6 +273,9 @@ class PipelineTests(unittest.IsolatedAsyncioTestCase):
             payload["properties"]["Status"],
             {"status": {"name": "NOT YET"}},
         )
+        self.assertEqual(payload["properties"]["Summary Status"], {"select": {"name": "Pending"}})
+        self.assertEqual(payload["properties"]["Summary"], {"rich_text": []})
+        self.assertEqual(payload["properties"]["Summarized At"], {"date": None})
 
     def test_summary_similarity_detects_shared_story_content(self):
         original = (

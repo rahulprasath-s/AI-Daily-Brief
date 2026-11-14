@@ -49,4 +49,12 @@ jobs:
           DIGEST_TIMEZONE: Europe/Berlin
           PUBLISH_DATE: ${{ inputs.date || '' }}
           RELEASE_AT: ${{ inputs.release_at || '' }}
-        run: python src/cli.py --publish --date "$PUBLISH_DATE" --release-at "$RELEASE_AT"
+        run: python src/cli.py --publish --date "$PUBLISH_DATE" --release-at "$RELEASE_AT" | tee digest-result.json
+
+      - name: Save delivered digest context for enrichment
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-context
+          path: digest-result.json
+          retention-days: 7
+          if-no-files-found: error

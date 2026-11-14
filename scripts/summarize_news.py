@@ -25,7 +25,8 @@ from check_story_summary import DATABASE_ID, ORIGINAL_TYPES, load_config, reques
 from nim_article_summary import DEFAULT_ARTICLE_MODEL, NimArticleClient, retry_after_seconds, source_attribution, summarize_source
 from notion import NOTION_DATABASES_URL, NOTION_PAGES_URL, NotionSummaryUpdateError, update_story_summary
 from story_summary import ready_summary_properties
-from summary_cache import SummaryCache, cache_key
+from summary_cache import cache_key
+from remote_summary_cache import CacheUnavailable, open_summary_cache
 
 
 class NotionWritePending(RuntimeError):
@@ -122,7 +123,7 @@ async def fetch_pages(env, target_date):
     return sorted(ranked, key=lambda page: int(plain_text(page["properties"]["Rank"])[1:]))
 
 
-async def run(target_date, publish=False, reuse_sources=False, min_interval=6, budget=1800, model=None):
+async def run(target_date, publish=False, reuse_sources=False, min_interval=6, budget=1800, model=None, require_remote=False):
     date.fromisoformat(target_date)
     env = load_config()
     verify_schema(await request_json(env, f"{NOTION_DATABASES_URL}/{DATABASE_ID}"))
@@ -130,7 +131,7 @@ async def run(target_date, publish=False, reuse_sources=False, min_interval=6, b
     print(f"Found {len(pages)} existing news records for {target_date}; mode={'publish' if publish else 'extraction-only'}", flush=True)
     if publish and not env.NVIDIA_NIM_API_KEY:
         raise ValueError("Missing NVIDIA_NIM_API_KEY; no records changed.")
-    cache = SummaryCache(ROOT / ".summary-cache")
+    cache = open_summary_cache(ROOT / ".summary-cache", env, require_remote=require_remote)
     report, deadline = [], time.monotonic() + budget
     try:
         async with httpx.AsyncClient(
@@ -204,6 +205,9 @@ async def run(target_date, publish=False, reuse_sources=False, min_interval=6, b
                                     row.update(status="Ready", summary_words=len(text.split()))
                 except NotionWritePending as exc:
                     row.update(status="Write pending", reason=str(exc))
+                except CacheUnavailable:
+                    # Fail closed before another generation or Notion mutation.
+                    raise
                 except Exception as exc:
                     status = "Unavailable" if isinstance(exc, SourceUnavailable) else "Failed"
                     reason = str(exc) or type(exc).__name__
@@ -216,6 +220,7 @@ async def run(target_date, publish=False, reuse_sources=False, min_interval=6, b
                         try:
                             await write_checkpoint(env, page, result_properties(status, reason), cache, identity)
                         except Exception as write_error:
+                            row["status"] = "Write pending"
                             row["write_error"] = str(write_error)[:300]
                 report.append(row)
                 print(json.dumps(row), flush=True)
@@ -238,7 +243,8 @@ if __name__ == "__main__":
     parser.add_argument("--reuse-sources", action="store_true", help="Use explicitly cached extraction snapshots from a preflight run.")
     parser.add_argument("--min-interval", type=float, default=6)
     parser.add_argument("--model", help="NIM article model; defaults to NVIDIA_NIM_ARTICLE_MODEL or the available instruction-model default.")
+    parser.add_argument("--require-remote-cache", action="store_true", help="Refuse local-only caching on ephemeral runners.")
     args = parser.parse_args()
-    result = asyncio.run(run(args.date, args.publish, args.reuse_sources, args.min_interval, model=args.model))
+    result = asyncio.run(run(args.date, args.publish, args.reuse_sources, args.min_interval, model=args.model, require_remote=args.require_remote_cache))
     if args.publish and any(row["status"] in ("Failed", "Write pending", "Pending") for row in result["stories"]):
         raise SystemExit(1)

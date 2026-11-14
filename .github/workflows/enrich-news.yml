@@ -1,0 +1,95 @@
+name: Enrich Delivered News
+run-name: Source summaries · ${{ inputs.date || 'after-delivery' }}
+
+on:
+  workflow_run:
+    workflows: [AI Daily Brief]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Delivered digest date (YYYY-MM-DD); defaults to today in Berlin"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+# Independent of delivery: a slow model cannot delay tomorrow's morning publish.
+concurrency:
+  group: ai-daily-brief-enrichment
+  cancel-in-progress: false
+
+jobs:
+  summarize:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+      NVIDIA_NIM_ARTICLE_MODEL: nvidia/nemotron-3.5-super-vl-120b-a12b
+      SUMMARY_CACHE_URL: ${{ vars.SUMMARY_CACHE_URL }}
+      SUMMARY_CACHE_TOKEN: ${{ secrets.SUMMARY_CACHE_TOKEN }}
+      DIGEST_TIMEZONE: Europe/Berlin
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install '.[summaries]'
+      - name: Read context from the successful delivery
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v8
+        with:
+          name: digest-context
+          path: delivery-context
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Resolve the delivered date
+        id: digest
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_DATE: ${{ inputs.date || '' }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_run ]; then
+            python scripts/enrichment_date.py --context delivery-context/digest-result.json
+          else
+            python scripts/enrichment_date.py --date "$MANUAL_DATE"
+          fi
+      - name: Summarize existing news records
+        id: first
+        continue-on-error: true
+        env:
+          DIGEST_DATE: ${{ steps.digest.outputs.date }}
+        run: python scripts/summarize_news.py --date "$DIGEST_DATE" --publish --require-remote-cache
+      - name: Resume after transient failures
+        id: retry
+        if: steps.first.outcome == 'failure'
+        continue-on-error: true
+        env:
+          DIGEST_DATE: ${{ steps.digest.outputs.date }}
+        run: |
+          sleep 60
+          python scripts/summarize_news.py --date "$DIGEST_DATE" --publish --require-remote-cache
+      - name: Save diagnostic report only
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: summary-report
+          path: .summary-cache/report-*.json
+          retention-days: 7
+          if-no-files-found: ignore
+          include-hidden-files: true
+      - name: Report unresolved failures
+        if: steps.first.outcome == 'failure' && steps.retry.outcome != 'success'
+        run: exit 1

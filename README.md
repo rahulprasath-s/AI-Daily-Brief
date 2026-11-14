@@ -402,7 +402,11 @@ NIM summaries are kept concise so the Notion `Description` field stays readable.
 
 ## Source Behavior
 
-### Optional Source-Backed Summary Stage
+### Daily Source-Backed Summary Stage
+
+After the morning **AI Daily Brief** workflow succeeds, **Enrich Delivered News** runs separately. It reads the delivered digest date from a seven-day `digest-context` artifact, extracts each existing story, generates a source-backed NIM summary, and updates that same Notion page. The 08:00 Europe/Berlin release, ranking, Description, and existing Status are preserved. Summaries arrive after news delivery; their completion time depends on source access and API rate limits.
+
+The enrichment workflow uses `nvidia/nemotron-3.5-super-vl-120b-a12b`, serial requests, bounded per-request/story/batch budgets, and one additional resumable batch attempt after a 60-second pause. It has its own concurrency group, so retries cannot hold up morning delivery. Unresolved failures fail enrichment visibly; blocked/unsupported sources remain explicitly Unavailable. Retry an interrupted date with **Actions → Enrich Delivered News → Run workflow**, supplying its delivered date.
 
 The new CPython-only enrichment command updates **existing** news records. It does not create pages, replace `Description`, change the existing `Status`, or change ranking and morning delivery. It is currently a manual test command; it is not wired into the live scheduled workflow.
 
@@ -434,7 +438,17 @@ The model treats source text as untrusted data. Summaries use plain spoken Engli
 
 For a story that needs the larger current model, use `--model nvidia/nemotron-3.5-super-vl-120b-a12b`. Changing models does not regenerate unchanged stories already Ready; model-specific new results have separate cache keys.
 
-The ignored `.summary-cache/` directory contains source snapshots, intermediate/final generated results, and pending-write checkpoints in SQLite. Successful model results are committed there **before** a Notion update, so rerunning the same command can retry a failed write without regenerating the summary. Ready summaries with unchanged known source content are skipped. Read-back checks account for Notion's observed minute-level Date precision. `--reuse-sources` explicitly reuses a cached extraction snapshot from a preflight run; omit it to re-fetch sources. Cache storage is local to this machine: durable shared storage must be configured before using this stage on ephemeral GitHub runners. The final JSON report includes status counts and model request counts; a publish run exits nonzero after finishing all stories if any remain Failed, Pending, or awaiting write verification.
+The ignored `.summary-cache/` directory contains local SQLite checkpoints. When `SUMMARY_CACHE_URL` and `SUMMARY_CACHE_TOKEN` are configured, every generated result and pending Notion write is also persisted through the authenticated cache Worker to D1 **before** a Notion update. Fresh GitHub runners restore those results instead of regenerating them when a Notion write failed. Daily CI requires this remote cache and fails closed if it is unavailable. Ready summaries with unchanged known source content are skipped. Read-back checks account for Notion's minute-level Date precision. `--reuse-sources` explicitly reuses extraction snapshots; daily runs re-fetch sources. Sources/intermediate notes expire after 45 days; successful results and write checkpoints after 365 days. After expiry, an existing Ready summary is preserved if no prior fingerprint remains. Only diagnostic reports are uploaded as artifacts, never the SQLite database or source snapshots. Publish runs exit nonzero if any stories remain Failed, Pending, or awaiting write verification.
+
+Cache infrastructure lives in `cache/`, independently of the existing morning scheduler. To reproduce provisioning with authenticated Wrangler and GitHub CLIs:
+
+```bash
+./node_modules/.bin/wrangler d1 execute ai-daily-brief-summary-cache --remote --file cache/schema.sql --config cache/wrangler.jsonc
+./node_modules/.bin/wrangler deploy --config cache/wrangler.jsonc
+.venv/bin/python scripts/configure_summary_cache.py --configure --seed
+```
+
+The configuration command stores a random cache token as a Worker/GitHub secret, sets the GitHub `SUMMARY_CACHE_URL` variable, and syncs the active local NIM key to the existing GitHub secret. Values travel through stdin, never command arguments or logs. Local `.dev.vars` remains ignored. The cache accepts only authenticated requests, bounded JSON objects, and prepared SQL statements; its public `/health` endpoint reports configuration presence only. Rotate the token in `.dev.vars` and rerun `--configure` if needed. Run `wrangler types cache/worker-configuration.d.ts --config cache/wrangler.jsonc` after changing bindings.
 
 On November 14, the legacy `qwen/qwen3-next-80b-a3b-instruct` endpoint returned HTTP 410 and was absent from NVIDIA's model catalog. The new summary stage therefore has a separate instruction-model default; the existing ranking configuration remains untouched. A model appearing in `/v1/models` does not establish that a particular credential is authorized to generate with it.
 
