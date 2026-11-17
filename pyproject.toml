@@ -16,5 +16,11 @@ summaries = [
     "youtube-transcript-api>=1.2,<2",
 ]
 
+recovery = [
+    "langgraph>=1,<2",
+    "playwright>=1.50,<2",
+    "ddgs>=9,<10",
+]
+
 [dependency-groups]
 dev = ["workers-py", "workers-runtime-sdk"]
