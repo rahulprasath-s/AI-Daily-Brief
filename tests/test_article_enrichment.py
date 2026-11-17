@@ -17,7 +17,8 @@ import httpx
 from article_content import ArticleContent, SourceUnavailable, checked_content, extract_html, extract_source
 from nim_article_summary import DEFAULT_ARTICLE_MODEL, NimArticleClient, condense_complete_draft, retry_after_seconds, source_attribution, split_full_text, summarize_source, validate_spoken_summary
 from story_summary import ready_summary_properties
-from summary_cache import SummaryCache
+from summary_cache import SummaryCache, cache_key
+from nim_article_summary import PROMPT_VERSION
 from summarize_news import NotionWritePending, matches_saved, write_checkpoint
 from check_story_summary import ORIGINAL_TYPES
 
@@ -167,6 +168,67 @@ class CacheAndWriteTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.cache.close()
         self.directory.cleanup()
+
+    async def test_overlong_single_paragraph_is_rewritten_and_final_is_reused(self):
+        source = ArticleContent(BODY * 4, "html_article", "https://example.com")
+        draft = " ".join(["detail"] * 450) + " The author says the findings are preliminary."
+        revised = "The author says the findings are preliminary. " + " ".join(["detail"] * 160) + "."
+        client = SimpleNamespace(model="fake", complete=AsyncMock(side_effect=[draft, revised]))
+        result = await summarize_source(client, self.cache, "overlong", "Title", source)
+        self.assertEqual(result, revised)
+        self.assertLessEqual(len(result.split()), 200)
+        payload = json.loads(client.complete.call_args_list[1].args[0][1]["content"])
+        self.assertEqual(payload["untrusted_source"], draft)
+        self.assertIn("material limitations", payload["task"])
+        self.assertEqual(await summarize_source(client, self.cache, "overlong", "Title", source), result)
+        self.assertEqual(client.complete.await_count, 2)
+
+    async def test_rewrite_resumes_after_interruption_without_regenerating_source_summary(self):
+        source = ArticleContent(BODY * 4, "html_article", "https://example.com")
+        first = " ".join(["detail"] * 450)
+        still_long = " ".join(["detail"] * 240)
+        revised = " ".join(["detail"] * 175)
+        client = SimpleNamespace(model="fake", complete=AsyncMock(side_effect=[first, still_long, RuntimeError("temporary failure")]))
+        with self.assertRaisesRegex(RuntimeError, "temporary failure"):
+            await summarize_source(client, self.cache, "resume-rewrite", "Title", source)
+        client.complete = AsyncMock(return_value=revised)
+        self.assertEqual(await summarize_source(client, self.cache, "resume-rewrite", "Title", source), revised)
+        client.complete.assert_awaited_once()
+        payload = json.loads(client.complete.call_args.args[0][1]["content"])
+        self.assertEqual(payload["untrusted_source"], still_long)
+
+    async def test_short_sources_keep_their_smaller_word_budget(self):
+        from nim_article_summary import summary_word_range
+        source = ArticleContent(BODY, "html_article", "https://example.com")
+        minimum, maximum = summary_word_range(len(BODY.split()))
+        draft = " ".join(["detail"] * (maximum + 80))
+        revised = " ".join(["detail"] * minimum)
+        client = SimpleNamespace(model="fake", complete=AsyncMock(side_effect=[draft, revised]))
+        self.assertEqual(await summarize_source(client, self.cache, "short-source", "Title", source), revised)
+        payload = json.loads(client.complete.call_args.args[0][1]["content"])
+        self.assertIn(f"{minimum} to {maximum} words", payload["task"])
+
+    async def test_attribution_counts_toward_limit_and_cached_overlong_result_is_repaired(self):
+        source = ArticleContent(BODY * 4, "huggingface_model_card", "https://huggingface.co/example/model")
+        key = cache_key("cached-overlong", source.fingerprint, "fake", PROMPT_VERSION, "final")
+        self.cache.set(key, {"text": " ".join(["detail"] * 200)})
+        client = SimpleNamespace(model="fake", complete=AsyncMock(return_value=" ".join(["detail"] * 175)))
+        result = await summarize_source(client, self.cache, "cached-overlong", "Title", source)
+        self.assertTrue(result.startswith("According to its model card,"))
+        self.assertLessEqual(len(result.split()), 200)
+        client.complete.assert_awaited_once()
+
+    async def test_failed_rewrites_are_bounded_and_never_saved_as_final(self):
+        source = ArticleContent(BODY * 4, "html_article", "https://example.com")
+        client = SimpleNamespace(model="fake", complete=AsyncMock(return_value=" ".join(["detail"] * 450)))
+        with self.assertRaisesRegex(ValueError, "rewrite failed.*three attempts"):
+            await summarize_source(client, self.cache, "always-long", "Title", source)
+        self.assertEqual(client.complete.await_count, 4)
+        key = cache_key("always-long", source.fingerprint, "fake", PROMPT_VERSION, "final")
+        self.assertIsNone(self.cache.get(key))
+        with self.assertRaisesRegex(ValueError, "rewrite failed"):
+            await summarize_source(client, self.cache, "always-long", "Title", source)
+        self.assertEqual(client.complete.await_count, 4)
 
     async def test_successful_model_result_survives_process_restart(self):
         content = ArticleContent(BODY, "html_article", "https://example.com")
