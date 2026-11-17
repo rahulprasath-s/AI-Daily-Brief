@@ -184,7 +184,11 @@ def condense_complete_draft(text, title, minimum, maximum):
         return None
     paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
     if len(paragraphs) < 2:
-        return None
+        # Models often return one long paragraph even after rewrite requests.
+        # Select only complete sentences, retaining attached qualifications.
+        paragraphs = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text.strip())
+        if len(paragraphs) < 2:
+            return None
     opening = re.split(r"(?<=[.!?])\s+", paragraphs[0], maxsplit=1)
     first = opening[0]
     candidates = ([opening[1]] if len(opening) == 2 else []) + paragraphs[1:]
@@ -196,7 +200,7 @@ def condense_complete_draft(text, title, minimum, maximum):
         words = re.findall(r"[A-Za-z0-9]+", paragraph.lower())
         return sum(min(3, words.count(term)) for term in terms)
     chosen, count = [], len(first.split())
-    caveats = re.compile(r"\b(?:however|but|limitations?|uncertain|preliminary|not independently verified|not proven|no evidence)\b", re.I)
+    caveats = re.compile(r"\b(?:however|but|limitations?|uncertain|preliminary|not independently verified|not proven|no evidence|requires?|only|cannot|may|might|must|restrict\w*)\b", re.I)
     required = {index for index, paragraph in enumerate(candidates) if caveats.search(paragraph)}
     if count + sum(len(candidates[index].split()) for index in required) > maximum:
         # Do not remove a material qualification merely to satisfy word count.
@@ -260,6 +264,12 @@ async def shorten_summary(client, cache, final_key, draft, title, content, minim
             # A too-short rewrite needs details from the complete original draft.
             if len(candidate.split()) >= minimum:
                 draft = candidate
+    # A complete-sentence excerpt is preferable to publishing an overlong draft
+    # or silently cutting a statement in half. Never drop required caveats.
+    excerpt = condense_complete_draft(draft, title, minimum, maximum)
+    if excerpt:
+        excerpt = source_attribution(excerpt, content.kind, content.url)
+        return validate_spoken_summary(excerpt, minimum, maximum)
     raise ValueError(f"Summary rewrite failed validation after three attempts: {error}")
 
 

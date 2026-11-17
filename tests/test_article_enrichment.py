@@ -208,6 +208,23 @@ class CacheAndWriteTests(unittest.IsolatedAsyncioTestCase):
         payload = json.loads(client.complete.call_args.args[0][1]["content"])
         self.assertIn(f"{minimum} to {maximum} words", payload["task"])
 
+    async def test_repeated_verbose_rewrites_fall_back_to_complete_qualified_sentences(self):
+        from nim_article_summary import summary_word_range
+        source = ArticleContent(BODY, "html_article", "https://example.com")
+        opening = "The company says its AI browser tool supports agents using existing browser sessions."
+        caveat = "Users must approve sensitive actions, and access may depend on their account settings."
+        extra = "The browser tool includes several optional integrations for development teams working on everyday tasks."
+        draft = " ".join([opening, caveat, *([extra] * 5)])
+        client = SimpleNamespace(model="fake", complete=AsyncMock(return_value=draft))
+        result = await summarize_source(client, self.cache, "sentence-fallback", "AI browser tool", source)
+        minimum, maximum = summary_word_range(len(BODY.split()))
+        self.assertTrue(minimum <= len(result.split()) <= maximum)
+        self.assertTrue(result.startswith(opening))
+        self.assertIn(caveat, result)
+        self.assertTrue(result.endswith("."))
+        self.assertTrue(set(result.split()).issubset(set(draft.split())))
+        self.assertEqual(client.complete.await_count, 4)
+
     async def test_attribution_counts_toward_limit_and_cached_overlong_result_is_repaired(self):
         source = ArticleContent(BODY * 4, "huggingface_model_card", "https://huggingface.co/example/model")
         key = cache_key("cached-overlong", source.fingerprint, "fake", PROMPT_VERSION, "final")
