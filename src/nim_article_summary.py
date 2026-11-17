@@ -218,23 +218,74 @@ def condense_complete_draft(text, title, minimum, maximum):
         return None
 
 
+async def shorten_summary(client, cache, final_key, draft, title, content, minimum, maximum):
+    """Rewrite a complete draft, with bounded, resumable compression attempts.
+
+    Never clip prose at a word boundary: doing so can lose a qualification.
+    Keep the existing final cache identity so valid saved results stay reusable.
+    """
+    repair_key = final_key + ":shorten-v1:" + cache_key(draft)
+    error = f"Draft contains {len(draft.split())} words."
+    for attempt in range(3):
+        key = f"{repair_key}:{attempt}"
+        saved = cache.get(key)
+        if saved:
+            candidate = saved["text"]
+        else:
+            # Save the input before generation, and each response before validation.
+            cache.set(repair_key + ":input", {"text": draft})
+            target = max(minimum, maximum - 20 - attempt * 10)
+            candidate = await client.complete([
+                {"role": "system", "content": SYSTEM},
+                {"role": "user", "content": json.dumps({
+                    "task": (
+                        f"Rewrite this complete source-grounded summary in {minimum} to {maximum} words. "
+                        f"Aim for {target} words, including any attribution. The current draft has "
+                        f"{len(draft.split())} words. {error} "
+                        "Combine related points, shorten sentences, and omit minor examples. "
+                        "Preserve the main development, attribution, uncertainty, and material limitations. "
+                        "Do not add facts or remove a caveat that changes a claim. "
+                        "Finish complete sentences. Return only natural spoken prose, without a link invitation."
+                    ),
+                    "source_title": title, "source_format": content.kind,
+                    "untrusted_source": draft,
+                }, ensure_ascii=False)},
+            ], max_tokens=900)
+            candidate = source_attribution(candidate, content.kind, content.url)
+            cache.set(key, {"text": candidate})
+        try:
+            return validate_spoken_summary(candidate, minimum, maximum)
+        except ValueError as exc:
+            error = str(exc)
+            # A too-short rewrite needs details from the complete original draft.
+            if len(candidate.split()) >= minimum:
+                draft = candidate
+    raise ValueError(f"Summary rewrite failed validation after three attempts: {error}")
+
+
 async def summarize_source(client, cache, page_id, title, content):
     final_key = cache_key(page_id, content.fingerprint, client.model, PROMPT_VERSION, "final")
+    minimum, maximum = summary_word_range(len(content.text.split()))
+
+    def save_final(text):
+        cache.set(final_key, {"text": text, "source_hash": content.fingerprint,
+                              "model": client.model, "prompt_version": PROMPT_VERSION})
+        return text
+
     cached = cache.get(final_key)
     if cached:
-        return source_attribution(cached["text"], content.kind, content.url)
+        text = source_attribution(cached["text"], content.kind, content.url)
+        if len(text.split()) > maximum:
+            text = await shorten_summary(client, cache, final_key, text, title, content, minimum, maximum)
+            return save_final(text)
+        return validate_spoken_summary(text, minimum, maximum)
 
-    minimum, maximum = summary_word_range(len(content.text.split()))
-    prior_attempt = cache.get(final_key + ":invalid:2")
+    prior_attempt = next((saved for attempt in reversed(range(3))
+                          if (saved := cache.get(final_key + f":invalid:{attempt}"))), None)
     if prior_attempt:
-        condensed = condense_complete_draft(prior_attempt["text"], title, minimum, maximum)
-        if condensed:
-            condensed = source_attribution(condensed, content.kind, content.url)
-            condensed = validate_spoken_summary(condensed, minimum, maximum)
-            cache.set(final_key, {"text": condensed, "source_hash": content.fingerprint,
-                                  "model": client.model, "prompt_version": PROMPT_VERSION,
-                                  "postprocessing": "complete-prose-passage selection from full-source NIM draft"})
-            return condensed
+        draft = source_attribution(prior_attempt["text"], content.kind, content.url)
+        if len(draft.split()) > maximum:
+            return save_final(await shorten_summary(client, cache, final_key, draft, title, content, minimum, maximum))
 
     material = content.text
     level = 0
@@ -317,6 +368,11 @@ async def summarize_source(client, cache, page_id, title, content):
             }, ensure_ascii=False)},
         ])
         text = source_attribution(text, content.kind, content.url)
+        if len(text.split()) > maximum:
+            cache.set(final_key + f":invalid:{attempt}", {
+                "text": text, "reason": f"Summary exceeds {maximum} words; rewrite required.",
+            })
+            text = await shorten_summary(client, cache, final_key, text, title, content, minimum, maximum)
         try:
             text = validate_spoken_summary(text, minimum, maximum)
             cache.set(final_key, {"text": text, "source_hash": content.fingerprint,
