@@ -404,6 +404,26 @@ NIM summaries are kept concise so the Notion `Description` field stays readable.
 
 ### Daily Source-Backed Summary Stage
 
+#### Recovery of unavailable sources
+
+The enrichment workflow also installs the `recovery` optional dependencies and Chromium. When normal extraction raises `SourceUnavailable`, a LangGraph agent can recover a public source before using the existing NIM summarizer. This runs after delivery, without changing the morning scheduler or original Notion fields.
+
+The graph is `decide → retrieve → verify → decide/finish`. NIM chooses only from enumerated actions: read an allowlisted public publisher through Jina Reader, render the original public page, search for public sources, fetch a discovered candidate, render an accessible candidate, or stop. It cannot invent executable tools or arbitrary target URLs. Search uses DDGS public metasearch, with Bing RSS fallback; providers may return no useful candidates. Search results are discovery hints only. A retrieved article must pass content/paywall/size checks and a separate exact-story evidence check, including a verbatim supporting passage. This is a relevance check, not independent fact verification.
+
+The public-reader tool sends only a public article URL to `r.jina.ai`, without API credentials. It is available only for an explicit publisher allowlist (OpenAI, Anthropic, Google's blog, NVIDIA's blog), never for a declared paywall or arbitrary discovered domain. Reader responses must identify the exact original URL and contain substantive source text without access-screen or truncation markers. Search providers and the reader are third-party services whose availability/rate limits can change; failures remain explicit. An original-publisher article retrieved through the reader keeps its original URL and publisher attribution. Alternative-source content is identified separately.
+
+Recovery has at most six retrieval actions, two searches, and four minutes per story. Each completed graph state, planning decision, and verification result is checkpointed in the existing cache. Verified content is reused on retries; interrupted verification resumes without refetching. Unsuccessful runs resume their saved budget for two hours, then may start a fresh bounded attempt when rerun, allowing temporary access/search failures to recover. Different candidate lists have different decision-cache identities. NIM transport/rate-limit handling is reused, and outer story/batch deadlines still apply. Browser sessions are fresh and unauthenticated, with public destination checks, blocked private addresses, request limits, no downloads, and no interaction with login, payment, or access challenges. Declared paywalls are not rendered to bypass access.
+
+For an alternative URL, Summary explicitly attributes the alternative publisher; the original Link remains unchanged. The exact retrieved URL and graph trace are stored in the diagnostic report and private source cache. Narrator should continue reading only Ready summaries. No snippet, headline, inaccessible source, or rejected match becomes a Ready article summary.
+
+```bash
+uv pip install --python .venv/bin/python -e '.[summaries,recovery]'
+.venv/bin/python -m playwright install chromium
+.venv/bin/python scripts/summarize_news.py --date 2026-11-17 --publish --require-remote-cache --recover-unavailable --retry-unresolved
+```
+
+`--retry-unresolved` excludes existing Ready pages entirely. Recovery requires explicit `--publish`, since planning and verification make NIM calls. Omitting `--recover-unavailable` preserves the original extraction-only fallback behavior. The initial learning example remains available as `build_recovery_graph()`; production uses `RecoveryAgent` in the same module.
+
 After the morning **AI Daily Brief** workflow succeeds, **Enrich Delivered News** runs separately. It reads the delivered digest date from a seven-day `digest-context` artifact, extracts each existing story, generates a source-backed NIM summary, and updates that same Notion page. The 08:00 Europe/Berlin release, ranking, Description, and existing Status are preserved. Summaries arrive after news delivery; their completion time depends on source access and API rate limits.
 
 The enrichment workflow uses `nvidia/nemotron-3.5-super-vl-120b-a12b`, serial requests, bounded per-request/story/batch budgets, and one additional resumable batch attempt after a 60-second pause. It has its own concurrency group, so retries cannot hold up morning delivery. Unresolved failures fail enrichment visibly; blocked/unsupported sources remain explicitly Unavailable. Retry an interrupted date with **Actions → Enrich Delivered News → Run workflow**, supplying its delivered date.
