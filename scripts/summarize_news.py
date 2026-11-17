@@ -123,11 +123,16 @@ async def fetch_pages(env, target_date):
     return sorted(ranked, key=lambda page: int(plain_text(page["properties"]["Rank"])[1:]))
 
 
-async def run(target_date, publish=False, reuse_sources=False, min_interval=6, budget=1800, model=None, require_remote=False):
+async def run(target_date, publish=False, reuse_sources=False, min_interval=6, budget=1800, model=None, require_remote=False,
+              recover_unavailable=False, retry_unresolved=False):
     date.fromisoformat(target_date)
+    if recover_unavailable and not publish:
+        raise ValueError("Recovery uses NIM planning and verification; explicitly pass --publish to enable it.")
     env = load_config()
     verify_schema(await request_json(env, f"{NOTION_DATABASES_URL}/{DATABASE_ID}"))
     pages = await fetch_pages(env, target_date)
+    if retry_unresolved:
+        pages = [page for page in pages if (page["properties"]["Summary Status"].get("select") or {}).get("name") != "Ready"]
     print(f"Found {len(pages)} existing news records for {target_date}; mode={'publish' if publish else 'extraction-only'}", flush=True)
     if publish and not env.NVIDIA_NIM_API_KEY:
         raise ValueError("Missing NVIDIA_NIM_API_KEY; no records changed.")
@@ -145,6 +150,11 @@ async def run(target_date, publish=False, reuse_sources=False, min_interval=6, b
             ) if publish else None
             if nim:
                 print(f"NIM article model: {nim.model}; minimum request interval: {min_interval}s", flush=True)
+            recovery = None
+            if recover_unavailable:
+                from article_recovery import RecoveryAgent
+                from recovery_tools import RecoveryTools
+                recovery = RecoveryAgent(nim, cache, RecoveryTools(http))
             for page in pages:
                 p = page["properties"]
                 page_id = page["id"]
@@ -174,8 +184,17 @@ async def run(target_date, publish=False, reuse_sources=False, min_interval=6, b
                             if snapshot and snapshot.get("identity") == identity:
                                 content = ArticleContent(**snapshot["content"])
                             else:
-                                content = await extract_source(http, url)
+                                try:
+                                    content = await extract_source(http, url)
+                                except SourceUnavailable as unavailable:
+                                    if recovery is None:
+                                        raise
+                                    content, trace = await recovery.recover(page_id, title, url, target_date, unavailable)
+                                    row.update(recovered=True, recovered_source_url=content.url, recovery_trace=trace)
                                 cache.set(source_key, {"identity": identity, "content": asdict(content)})
+                            if content.kind == "recovered_alternative":
+                                row.update(recovered=True, recovered_source_url=content.url,
+                                           source_note="Summary uses an explicitly attributed alternative source; original Link is unchanged.")
                             row.update(source_kind=content.kind, source_words=len(content.text.split()), source_hash=content.fingerprint)
                             if not publish:
                                 row["status"] = "Extracted"
@@ -244,7 +263,11 @@ if __name__ == "__main__":
     parser.add_argument("--min-interval", type=float, default=6)
     parser.add_argument("--model", help="NIM article model; defaults to NVIDIA_NIM_ARTICLE_MODEL or the available instruction-model default.")
     parser.add_argument("--require-remote-cache", action="store_true", help="Refuse local-only caching on ephemeral runners.")
+    parser.add_argument("--recover-unavailable", action="store_true", help="Enable the bounded LangGraph retrieval agent after extraction fails (requires --publish).")
+    parser.add_argument("--retry-unresolved", action="store_true", help="Process only stories not already Ready.")
     args = parser.parse_args()
-    result = asyncio.run(run(args.date, args.publish, args.reuse_sources, args.min_interval, model=args.model, require_remote=args.require_remote_cache))
+    result = asyncio.run(run(args.date, args.publish, args.reuse_sources, args.min_interval, model=args.model,
+                            require_remote=args.require_remote_cache, recover_unavailable=args.recover_unavailable,
+                            retry_unresolved=args.retry_unresolved))
     if args.publish and any(row["status"] in ("Failed", "Write pending", "Pending") for row in result["stories"]):
         raise SystemExit(1)

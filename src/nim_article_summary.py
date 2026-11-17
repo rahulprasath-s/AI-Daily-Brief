@@ -140,6 +140,24 @@ def summary_word_range(source_words):
 
 
 def source_attribution(text, kind, url=None):
+    if kind == "public_reader_article":
+        host = (urlsplit(url or "").hostname or "the publisher").removeprefix("www.")
+        publisher = {"openai.com": "OpenAI", "anthropic.com": "Anthropic", "blog.google": "Google", "blogs.nvidia.com": "NVIDIA"}.get(host, "the publisher")
+        prefix = f"According to {publisher}, "
+        if text.startswith(prefix):
+            return text
+        if text.startswith(("The ", "This ", "It ", "A ")):
+            text = text[0].lower() + text[1:]
+        return prefix + text if text else prefix.strip()
+    if kind == "recovered_alternative":
+        host = (urlsplit(url or "").hostname or "the retrieved source").removeprefix("www.")
+        publisher = host.replace(".", " ").replace("-", " ")
+        prefix = f"According to an alternative source from {publisher}, "
+        if text.startswith(prefix):
+            return text
+        if text.startswith(("The ", "This ", "It ", "A ")):
+            text = text[0].lower() + text[1:]
+        return prefix + text if text else prefix.strip()
     if kind == "huggingface_model_card" and not re.search(
         r"model card|according to|(?:authors|developers|team) (?:say|report|claim)", text, re.I,
     ):
