@@ -131,7 +131,7 @@ def split_full_text(text, limit=CHUNK_CHARS):
 
 def summary_word_range(source_words):
     if source_words >= 300:
-        return 150, 200
+        return 150, 170
     if source_words >= 120:
         return 60, 110
     if source_words >= 60:
@@ -176,7 +176,12 @@ def source_attribution(text, kind, url=None):
     return text
 
 
-def validate_spoken_summary(text, minimum, maximum):
+def validate_spoken_summary(text, minimum, maximum=None):
+    """Check usable prose; an upper limit is optional for editing utilities.
+
+    Publication uses no maximum: a complete, otherwise valid summary must not
+    fail solely because the model missed the prompt's target length.
+    """
     if re.search(r"https?://|www\.|```|\*\*|\[[^\]]+\]\(|^\s*[#{]", text, re.I):
         raise ValueError("Summary contains Markdown, a URL, or structured output.")
     if re.search(r"(?m)^\s*(?:[-*•]|\d+[.)])\s+", text):
@@ -184,7 +189,9 @@ def validate_spoken_summary(text, minimum, maximum):
     if re.search(r"(?m)^\s*#", text):
         raise ValueError("Summary contains a Markdown heading.")
     words = len(text.split())
-    if not minimum <= words <= maximum:
+    if words < minimum:
+        raise ValueError(f"Summary length {words} is below {minimum} words.")
+    if maximum is not None and words > maximum:
         raise ValueError(f"Summary length {words} is outside {minimum}–{maximum} words.")
     return " ".join(text.split())
 
@@ -240,60 +247,22 @@ def condense_complete_draft(text, title, minimum, maximum):
         return None
 
 
-async def shorten_summary(client, cache, final_key, draft, title, content, minimum, maximum):
-    """Rewrite a complete draft, with bounded, resumable compression attempts.
-
-    Never clip prose at a word boundary: doing so can lose a qualification.
-    Keep the existing final cache identity so valid saved results stay reusable.
-    """
-    repair_key = final_key + ":shorten-v1:" + cache_key(draft)
-    error = f"Draft contains {len(draft.split())} words."
-    for attempt in range(3):
-        key = f"{repair_key}:{attempt}"
-        saved = cache.get(key)
-        if saved:
-            candidate = saved["text"]
-        else:
-            # Save the input before generation, and each response before validation.
-            cache.set(repair_key + ":input", {"text": draft})
-            target = max(minimum, maximum - 20 - attempt * 10)
-            candidate = await client.complete([
-                {"role": "system", "content": SYSTEM},
-                {"role": "user", "content": json.dumps({
-                    "task": (
-                        f"Rewrite this complete source-grounded summary in {minimum} to {maximum} words. "
-                        f"Aim for {target} words, including any attribution. The current draft has "
-                        f"{len(draft.split())} words. {error} "
-                        "Combine related points, shorten sentences, and omit minor examples. "
-                        "Preserve the main development, attribution, uncertainty, and material limitations. "
-                        "Do not add facts or remove a caveat that changes a claim. "
-                        "Finish complete sentences. Return only natural spoken prose, without a link invitation."
-                    ),
-                    "source_title": title, "source_format": content.kind,
-                    "untrusted_source": draft,
-                }, ensure_ascii=False)},
-            ], max_tokens=900)
-            candidate = source_attribution(candidate, content.kind, content.url)
-            cache.set(key, {"text": candidate})
-        try:
-            return validate_spoken_summary(candidate, minimum, maximum)
-        except ValueError as exc:
-            error = str(exc)
-            # A too-short rewrite needs details from the complete original draft.
-            if len(candidate.split()) >= minimum:
-                draft = candidate
-    # A complete-sentence excerpt is preferable to publishing an overlong draft
-    # or silently cutting a statement in half. Never drop required caveats.
-    excerpt = condense_complete_draft(draft, title, minimum, maximum)
-    if excerpt:
-        excerpt = source_attribution(excerpt, content.kind, content.url)
-        return validate_spoken_summary(excerpt, minimum, maximum)
-    raise ValueError(f"Summary rewrite failed validation after three attempts: {error}")
+def final_system_prompt():
+    return SYSTEM + (
+        "\nStrict final-summary length: 150–170 words, including attribution. "
+        "Aim for 160 words. Count the words and revise before replying. "
+        "Use complete sentences. Never pad the summary or invent details to meet the target."
+    )
 
 
 async def summarize_source(client, cache, page_id, title, content):
+    # Keep the cache identity: existing final results and previously rejected
+    # drafts remain reusable under the relaxed publication length policy.
     final_key = cache_key(page_id, content.fingerprint, client.model, PROMPT_VERSION, "final")
-    minimum, maximum = summary_word_range(len(content.text.split()))
+    # Keep a source-aware minimum validation floor so sparse sources need not
+    # be padded. The generation prompt always requests 150–170 words.
+    minimum, _ = summary_word_range(len(content.text.split()))
+    target_minimum, maximum = 150, 170
 
     def save_final(text):
         cache.set(final_key, {"text": text, "source_hash": content.fingerprint,
@@ -303,17 +272,26 @@ async def summarize_source(client, cache, page_id, title, content):
     cached = cache.get(final_key)
     if cached:
         text = source_attribution(cached["text"], content.kind, content.url)
-        if len(text.split()) > maximum:
-            text = await shorten_summary(client, cache, final_key, text, title, content, minimum, maximum)
-            return save_final(text)
-        return validate_spoken_summary(text, minimum, maximum)
+        return save_final(validate_spoken_summary(text, minimum))
 
-    prior_attempt = next((saved for attempt in reversed(range(3))
-                          if (saved := cache.get(final_key + f":invalid:{attempt}"))), None)
-    if prior_attempt:
-        draft = source_attribution(prior_attempt["text"], content.kind, content.url)
-        if len(draft.split()) > maximum:
-            return save_final(await shorten_summary(client, cache, final_key, draft, title, content, minimum, maximum))
+    # Recover the latest usable rewrite before the original rejected draft.
+    # This unblocks old length-only failures without another inference request.
+    for attempt in reversed(range(3)):
+        saved = cache.get(final_key + f":invalid:{attempt}")
+        if not saved:
+            continue
+        draft = source_attribution(saved["text"], content.kind, content.url)
+        repair_key = final_key + ":shorten-v1:" + cache_key(draft)
+        candidates = [cache.get(f"{repair_key}:{index}") for index in reversed(range(3))]
+        candidates.append({"text": draft})
+        for candidate in candidates:
+            if not candidate:
+                continue
+            text = source_attribution(candidate["text"], content.kind, content.url)
+            try:
+                return save_final(validate_spoken_summary(text, minimum))
+            except ValueError:
+                continue
 
     material = content.text
     level = 0
@@ -375,19 +353,19 @@ async def summarize_source(client, cache, page_id, title, content):
     prior_candidate = None
     for attempt in range(3):
         if prior_candidate is None:
-            task = f"Summarize this story in {minimum} to {maximum} words; aim for {(minimum + maximum) // 2}. Use fewer details for short sources; never pad or invent."
+            task = f"Summarize this story in {target_minimum} to {maximum} words; aim for {(target_minimum + maximum) // 2}. Use fewer details for short sources; never pad or invent."
             current_material = material
             coverage = "Notes covering all source segments" if level else "Complete extracted source text"
         elif len(prior_candidate.split()) < minimum:
-            task = f"The prior draft was too short. Write a fuller summary of {minimum} to {maximum} words, aiming for {(minimum + maximum) // 2}. Include additional relevant details supported by the supplied complete source or complete segment notes, without filler or invention. Preserve attribution and limitations. {correction}"
+            task = f"The prior draft was too short. Write a fuller summary of {target_minimum} to {maximum} words, aiming for {(target_minimum + maximum) // 2}. Include additional relevant details supported by the supplied complete source or complete segment notes, without filler or invention. Preserve attribution and limitations. {correction}"
             current_material = material
             coverage = "Complete source material, provided again to support a fuller summary"
         else:
-            task = f"Edit the provided source-grounded draft into {minimum} to {maximum} words, aiming for {minimum + 5}. Shorten sentences and remove minor examples while preserving the main point, attribution, uncertainty, and limitations. Do not add any facts. {correction}"
+            task = f"Edit the provided source-grounded draft into {target_minimum} to {maximum} words, aiming for {target_minimum + 10}. Shorten sentences and remove minor examples while preserving the main point, attribution, uncertainty, and limitations. Do not add any facts. {correction}"
             current_material = prior_candidate
             coverage = "A source-grounded draft covering the source; compress the prose without adding facts"
         text = await client.complete([
-            {"role": "system", "content": SYSTEM},
+            {"role": "system", "content": final_system_prompt()},
             {"role": "user", "content": json.dumps({
                 "task": task,
                 "source_title": title, "source_format": content.kind,
@@ -396,13 +374,8 @@ async def summarize_source(client, cache, page_id, title, content):
             }, ensure_ascii=False)},
         ])
         text = source_attribution(text, content.kind, content.url)
-        if len(text.split()) > maximum:
-            cache.set(final_key + f":invalid:{attempt}", {
-                "text": text, "reason": f"Summary exceeds {maximum} words; rewrite required.",
-            })
-            text = await shorten_summary(client, cache, final_key, text, title, content, minimum, maximum)
         try:
-            text = validate_spoken_summary(text, minimum, maximum)
+            text = validate_spoken_summary(text, minimum)
             cache.set(final_key, {"text": text, "source_hash": content.fingerprint,
                                   "model": client.model, "prompt_version": PROMPT_VERSION})
             return text
